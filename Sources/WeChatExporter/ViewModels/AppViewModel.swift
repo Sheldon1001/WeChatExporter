@@ -152,6 +152,33 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    private func setProgress(_ fraction: Double, _ label: String) {
+        operationProgress = min(max(fraction, 0), 1)
+        operationProgressLabel = label
+    }
+
+    /// 把单个会话的导出进度映射到整体进度条的 `base ..< base + span` 区间。
+    ///
+    /// wx-cli 只在解析媒体时给得出百分比，前面读消息、后面整理文本都没有数字，
+    /// 所以这里把媒体阶段压在该会话区间的 10%–90% 之间，两头留给其余步骤。
+    private func exportProgressHandler(base: Double, span: Double, prefix: String) -> @Sendable (String) -> Void {
+        { [weak self] message in
+            Task { @MainActor in
+                guard let self else { return }
+                var fraction = base + span * 0.1
+                if let range = message.range(of: #"(\d+)/(\d+)"#, options: .regularExpression) {
+                    let pair = message[range].split(separator: "/")
+                    if let done = Double(pair[0]), let total = Double(pair[1]), total > 0 {
+                        fraction = base + span * (0.1 + 0.8 * min(done / total, 1))
+                    }
+                }
+                // 进度条只增不减：同一会话里图片阶段结束后语音阶段会从头计数
+                let next = max(self.operationProgress ?? 0, fraction)
+                self.setProgress(next, "\(prefix)：\(message)")
+            }
+        }
+    }
+
     private func progressHandler() -> @Sendable (LoadProgressUpdate) -> Void {
         { [weak self] update in
             let fraction = update.fraction
@@ -333,9 +360,12 @@ final class AppViewModel: ObservableObject {
 
         isBusy = true
         statusText = "导出中…"
+        setProgress(0, "准备导出…")
         defer {
             isBusy = false
             statusText = "就绪"
+            operationProgress = nil
+            operationProgressLabel = ""
         }
 
         let mode = exportMode
@@ -346,16 +376,28 @@ final class AppViewModel: ObservableObject {
 
             switch backend {
             case .wxCli(let wxCli):
-                for contact in selected {
+                for (index, contact) in selected.enumerated() {
                     let tempDir = FileManager.default.temporaryDirectory
                         .appendingPathComponent("WeChatExporter-\(UUID().uuidString)", isDirectory: true)
                     defer { try? FileManager.default.removeItem(at: tempDir) }
+
+                    // 会话之间按完成个数推进；单个会话内部再按媒体处理条数细分，
+                    // 免得含媒体的大会话导出时进度条整段不动
+                    let progressBase = Double(index) / Double(selected.count)
+                    let progressSpan = 1.0 / Double(selected.count)
+                    let prefix = selected.count > 1
+                        ? "（\(index + 1)/\(selected.count)）\(contact.displayName)"
+                        : contact.displayName
+                    setProgress(progressBase, "\(prefix)：正在读取消息…")
 
                     let count = try await wxCli.export(
                         contact: contact,
                         outputDir: tempDir,
                         includeMedia: mode.includesMedia,
-                        log: logHandler()
+                        // 网页导出只读 chat.json；含媒体时省掉 txt 那一趟能少做一遍全部媒体活
+                        needsPlainText: mode != .singleFileHTML,
+                        log: logHandler(),
+                        onProgress: exportProgressHandler(base: progressBase, span: progressSpan, prefix: prefix)
                     )
 
                     switch mode {

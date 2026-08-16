@@ -16,6 +16,13 @@ All notable changes to this project are documented in this file.
 - **动态表情会动**（macOS）：WXGF 表情改用 `palettegen`/`paletteuse` 转成动图 GIF，此前只能取单帧静图
 - **语音归档**：「分类导出」新增 `<联系人>/语音/` 分类，此前语音会被丢进「其他」
 
+### Performance
+- **含媒体导出快 2–3.7 倍**（实测 74479 条消息、4413 个媒体文件的群聊）
+  - 原先对同一个会话跑两趟 wx-cli（txt 一趟、json 一趟），两趟都完整做了图片解密与语音转码。网页导出只读 `chat.json`，现在直接省掉 txt 那一趟：146s → 39s
+  - 分类导出与全部导出仍需要 chat.txt（里面有 `[图片1] media/xxx.png` 附件索引，加 `--no-media` 会整段丢失），保留两趟但都提速：146s → 77s
+  - 媒体解析传入 `--parallel`：wx-cli 默认只用 `min(CPU, 4)` 个线程，放开到 CPU 核数后单趟 74s → 41s
+- **导出进度条不再空转**。此前含媒体的大会话导出期间界面只有一个不动的「处理中…」，现在解析 wx-cli 的 `media: image 610/762` 输出，显示当前会话、阶段与处理条数
+
 ### Fixed
 - **导出大量媒体时界面卡死**。后台逐行把日志派发到主线程，媒体密集的导出几秒内上万行会把主队列灌满，应用变成「未响应」。改为后台缓冲 + 定时批量刷新，并把连续重复的行折叠成「（上一行重复了 N 次）」
 - **内置 ffmpeg 缺少 png 编码器**，导致每张 WXGF 图片都报 `Unknown encoder 'png'` 并保持 `.wxgf` 无法显示。根因是 `--disable-autodetect` 连带关掉了 zlib，而 png 编解码器依赖 zlib，configure 于是静默丢弃了它；已显式 `--enable-zlib`，并把自检改为逐项核对全部编解码器 / 滤镜 / 封装器 + 端到端跑通 PNG 与 GIF 两条通路

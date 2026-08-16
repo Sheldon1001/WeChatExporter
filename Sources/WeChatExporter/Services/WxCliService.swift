@@ -17,6 +17,9 @@ final class WxCliService {
         self.isBundled = Self.isBundledExecutable(found)
     }
 
+    /// 媒体解析的并发度。wx-cli 默认只用 `min(CPU, 4)`，在多核机器上明显吃不满。
+    static let mediaParallelism = max(4, min(ProcessInfo.processInfo.activeProcessorCount, 12))
+
     /// 应用包内随附的 wx-cli（安装即用，无需单独安装 CLI）。
     static func bundledExecutable() -> URL? {
         let candidates = [
@@ -273,29 +276,77 @@ final class WxCliService {
         return sorted
     }
 
-    func export(contact: ContactItem, outputDir: URL, includeMedia: Bool = false, log: @escaping (String) -> Void) async throws -> Int {
+    /// wx-cli 在解析媒体时会往 stderr 打形如 `media: image 610/762` 的进度行。
+    /// 解析出来才能驱动进度条——否则含媒体的大会话导出期间界面只有一个不动的「处理中…」。
+    static func parseMediaProgress(_ line: String) -> (kind: String, done: Int, total: Int)? {
+        guard line.hasPrefix("media: ") else { return nil }
+        let parts = line.dropFirst("media: ".count).split(separator: " ")
+        guard parts.count == 2, let slash = parts[1].firstIndex(of: "/") else { return nil }
+        guard let done = Int(parts[1][parts[1].startIndex..<slash]),
+              let total = Int(parts[1][parts[1].index(after: slash)...]),
+              total > 0 else { return nil }
+        let kind: String
+        switch parts[0] {
+        case "image": kind = "图片"
+        case "voice": kind = "语音"
+        case "video": kind = "视频"
+        default: kind = String(parts[0])
+        }
+        return (kind, done, total)
+    }
+
+    /// - Parameter needsPlainText: 是否需要 wx-cli 的 txt 版聊天记录。
+    ///   网页导出只读 `chat.json`，用不到 txt——而含媒体时 txt 那一趟会把图片解密、
+    ///   语音转码原封不动再做一遍（实测 74s 的活重复一次），所以能省则省。
+    ///   分类导出 / 全部导出会把 chat.txt 交给用户，必须保留：txt 里有
+    ///   `[图片1] media/xxx.png` 这样的附件索引，加 `--no-media` 会整段丢失。
+    func export(
+        contact: ContactItem,
+        outputDir: URL,
+        includeMedia: Bool = false,
+        needsPlainText: Bool = true,
+        log: @escaping (String) -> Void,
+        onProgress: (@Sendable (String) -> Void)? = nil
+    ) async throws -> Int {
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
         // 始终使用唯一的 wxid/username 作为查询条件，避免 displayName 不唯一导致导出错位
         let query = contact.id
         log("导出：\(contact.displayName)（\(contact.id)）\(includeMedia ? "（含媒体）" : "")")
 
-        var txtArgs = ["export", query, "--output", outputDir.path, "--format", "txt", "--all"]
         var jsonArgs = ["export", query, "--output", outputDir.path, "--format", "json", "--all"]
+        var txtArgs = ["export", query, "--output", outputDir.path, "--format", "txt", "--all"]
         if !includeMedia {
-            txtArgs.append("--no-media")
             jsonArgs.append("--no-media")
+            txtArgs.append("--no-media")
         } else {
-            txtArgs.append("--show-emoji")
             jsonArgs.append("--show-emoji")
+            txtArgs.append("--show-emoji")
+            // 媒体解析是导出里最慢的一步，wx-cli 默认只用 min(CPU,4) 个线程，
+            // 放开到 CPU 核数后实测 74s → 41s
+            let parallel = ["--parallel", String(Self.mediaParallelism)]
+            jsonArgs.append(contentsOf: parallel)
+            txtArgs.append(contentsOf: parallel)
+        }
+
+        let relay: (@Sendable (String) -> Void)? = onProgress.map { report in
+            { @Sendable line in
+                guard let p = Self.parseMediaProgress(line) else { return }
+                report("正在处理\(p.kind) \(p.done)/\(p.total)")
+            }
         }
 
         let exportTimeout: TimeInterval? = includeMedia ? nil : 600
-        _ = try await run(txtArgs, timeout: exportTimeout, log: log)
-        _ = try await run(jsonArgs, timeout: exportTimeout, log: log)
+        _ = try await run(jsonArgs, timeout: exportTimeout, log: log, onActivity: relay)
+        if needsPlainText {
+            onProgress?("正在整理文本记录…")
+            _ = try await run(txtArgs, timeout: exportTimeout, log: log, onActivity: relay)
+        }
 
         Self.normalizeExportArtifacts(in: outputDir, log: log)
         if includeMedia {
+            onProgress?("正在下载表情…")
             _ = await EmojiExporter.exportEmojis(in: outputDir, log: log)
+            onProgress?("正在处理图片…")
             _ = await ImageExporter.exportImages(in: outputDir, log: log)
             Self.normalizeExportArtifacts(in: outputDir, log: log)
         }
