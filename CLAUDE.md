@@ -69,7 +69,7 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 
 - **两个二进制缺一不可。** wx-cli 用 ffprobe 的 `-count_frames` 数 WXGF 里 HEVC 流的帧数，据此决定输出静态 PNG 还是动图 GIF。只给 ffmpeg 不给 ffprobe，动态表情会始终出不来——这个坑踩过一次
 - **构建脚本不可加 `--enable-gpl` / `--enable-version3`**。`libmp3lame` 是 LGPL，不需要 GPL；一旦加了，MIT 的分发前提就不成立。详见 `vendor/README.md`
-- 组件清单是从 wx-cli 二进制里还原出的实际调用倒推的，`--disable-everything` 之下漏一个组件就是运行期才炸（比如 PCM demuxer 的组件名是 `pcm_s16le` 而非格式名 `s16le`）。CI 有端到端自检兜底
+- 组件清单是从 wx-cli 二进制里还原出的实际调用倒推的，`--disable-everything` 之下漏一个组件就是运行期才炸。踩过两次：PCM demuxer 的组件名是 `pcm_s16le` 而非格式名 `s16le`；png 编解码器依赖 zlib，而 `--disable-autodetect` 会连 zlib 一起关掉，configure 于是**静默丢弃** png，直到用户导出时才报 `Unknown encoder 'png'`。**所以自检必须逐项核对每个组件并端到端跑通每条通路**，构建脚本和 CI 里都有
 
 `WXGFTranscoder.locateFFmpeg()` 也会优先用包内这份，把 WXGF 动态表情转成动图 GIF；拿不到 ffmpeg 时退回 AVFoundation 只能取单帧静图。
 
@@ -101,7 +101,9 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 
 ### 进度与日志
 
-`LoadProgressTracker`（`Models/LoadProgress.swift`）合并「时间预估」与「真实分页进度」，保证进度条单调不回退：无总量时按耗时爬到 ≤30%，解密阶段 ≤35%，拿到 `paging.total` 后映射 35%–99%。所有回调都通过 `AppViewModel.logHandler()` / `progressHandler()` 切回主线程；日志数组上限 300 行。
+`LoadProgressTracker`（`Models/LoadProgress.swift`）合并「时间预估」与「真实分页进度」，保证进度条单调不回退：无总量时按耗时爬到 ≤30%，解密阶段 ≤35%，拿到 `paging.total` 后映射 35%–99%。
+
+**日志绝不能逐行派发到主线程。** `AppViewModel.logHandler()` 返回的闭包只往 `LogBuffer`（`Models/LogBuffer.swift`）里塞，由 `startLogPump()` 每 200ms 批量刷进 `@Published logs`（上限 300 行），空闲 3 秒后自动停下。`WxCliService.run()` 也直接在读管道的线程上调用 `log`，不再 `DispatchQueue.main.async`。原因：wx-cli 处理上千张图且每张都报错时，几秒内上万次主线程派发会把主队列彻底堵死，应用在活动监视器里显示「未响应」——这个坑踩过。`LogBuffer` 还会把连续重复的行折叠成「（上一行重复了 N 次）」。
 
 ### 自动更新（仅 macOS）
 

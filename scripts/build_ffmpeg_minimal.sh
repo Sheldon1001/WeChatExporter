@@ -93,6 +93,8 @@ export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
   --disable-doc --disable-debug --disable-network --disable-iconv \
   --enable-small \
   --enable-demuxer=pcm_s16le,hevc,image2,image2pipe,mp3,mov,matroska \
+  `# png 编解码器依赖 zlib，而 --disable-autodetect 会连 zlib 一起关掉——` \
+  `# 必须显式 --enable-zlib，否则 configure 会静默丢弃 png，运行期才报 Unknown encoder 'png'` \
   --enable-decoder=pcm_s16le,hevc,mjpeg,png,gif \
   --enable-parser=hevc,mjpeg,png,gif \
   --enable-encoder=libmp3lame,png,gif,mjpeg \
@@ -103,6 +105,7 @@ export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
   --enable-protocol=pipe,file \
   --enable-bsf=hevc_mp4toannexb,extract_extradata \
   --enable-libmp3lame \
+  --enable-zlib \
   --enable-videotoolbox --enable-hwaccel=hevc_videotoolbox
 
 make -j"$(sysctl -n hw.ncpu)"
@@ -115,15 +118,24 @@ BUILT_PROBE="$WORK/ffmpeg-${FFMPEG_VERSION}/ffprobe"
 
 # ------------------------------------------------------------------ 自检
 echo "==> 自检"
-"$BUILT" -hide_banner -encoders 2>/dev/null | grep -q libmp3lame \
-  || { echo "错误：缺少 libmp3lame 编码器" >&2; exit 1; }
-"$BUILT" -hide_banner -decoders 2>/dev/null | grep -qw hevc \
-  || { echo "错误：缺少 hevc 解码器" >&2; exit 1; }
-"$BUILT" -hide_banner -encoders 2>/dev/null | grep -qw gif \
-  || { echo "错误：缺少 gif 编码器" >&2; exit 1; }
-for f in palettegen paletteuse split scale; do
-  "$BUILT" -hide_banner -filters 2>/dev/null | grep -qw "$f" \
-    || { echo "错误：缺少 $f 滤镜（WXGF 动图通路需要）" >&2; exit 1; }
+# 逐项核对，一个都不能漏：configure 对拿不到依赖的组件是静默丢弃的，
+# 只有在运行期才会以 "Unknown encoder 'xxx'" 的形式炸出来。
+# （png 就这样漏过一次：它依赖 zlib，而 --disable-autodetect 把 zlib 也关了。）
+for e in libmp3lame png gif mjpeg; do
+  "$BUILT" -hide_banner -encoders 2>/dev/null | awk '{print $2}' | grep -qx "$e" \
+    || { echo "错误：缺少 $e 编码器" >&2; exit 1; }
+done
+for d in pcm_s16le hevc png gif mjpeg; do
+  "$BUILT" -hide_banner -decoders 2>/dev/null | awk '{print $2}' | grep -qx "$d" \
+    || { echo "错误：缺少 $d 解码器" >&2; exit 1; }
+done
+for f in palettegen paletteuse split scale format fps null; do
+  "$BUILT" -hide_banner -filters 2>/dev/null | awk '{print $2}' | grep -qx "$f" \
+    || { echo "错误：缺少 $f 滤镜" >&2; exit 1; }
+done
+for m in mp3 image2 image2pipe gif; do
+  "$BUILT" -hide_banner -muxers 2>/dev/null | awk '{print $2}' | grep -qx "$m" \
+    || { echo "错误：缺少 $m 封装器" >&2; exit 1; }
 done
 
 # 端到端跑一遍语音通路：1 秒静音 PCM → MP3
@@ -132,12 +144,39 @@ head -c 48000 /dev/zero | "$BUILT" -hide_banner -loglevel error \
 [[ -s "$WORK/selftest.mp3" ]] || { echo "错误：语音通路自检失败" >&2; exit 1; }
 echo "语音通路自检通过（$(wc -c < "$WORK/selftest.mp3") 字节 MP3）"
 
-# ffprobe 要能数出帧数，wx-cli 靠它区分动图与静图
-"$BUILT_PROBE" -hide_banner -v error -count_frames -select_streams v:0 \
-  -show_entries stream=nb_read_frames -of default=nw=1:nk=1 "$WORK/selftest.mp3" >/dev/null 2>&1 || true
-"$BUILT_PROBE" -hide_banner -version >/dev/null 2>&1 \
-  || { echo "错误：ffprobe 无法运行" >&2; exit 1; }
-echo "ffprobe 自检通过"
+# 端到端跑 WXGF 的两条通路。wx-cli 拿到的是裸 HEVC 流，这里用系统 ffmpeg 造一段
+# 多帧样本；造不出来就跳过（CI 上一定有，本机没装 ffmpeg 时不阻塞构建）。
+SAMPLE="$WORK/wxgf-sample.h265"
+if command -v ffmpeg >/dev/null 2>&1 &&
+   ffmpeg -y -hide_banner -loglevel error -f lavfi -i testsrc=duration=0.5:size=128x128:rate=24 \
+     -c:v hevc_videotoolbox -f hevc "$SAMPLE" 2>/dev/null && [[ -s "$SAMPLE" ]]; then
+
+  # 文件头用字节比对，不要用 grep：二进制输入下 grep 的行为不可靠
+  magic() { head -c "$2" "$1" | xxd -p | tr -d '\n'; }
+
+  # 静图通路：解 HEVC 首帧成 PNG（png 编码器缺失时正是在这里炸）
+  "$BUILT" -y -hide_banner -loglevel error -i "$SAMPLE" \
+    -frames:v 1 -f image2pipe -vcodec png pipe:1 > "$WORK/selftest.png"
+  [[ "$(magic "$WORK/selftest.png" 4)" == "89504e47" ]] \
+    || { echo "错误：WXGF 静图通路自检失败，产物不是 PNG" >&2; exit 1; }
+
+  # 动图通路：palettegen/paletteuse 转 GIF
+  "$BUILT" -y -hide_banner -loglevel error -i "$SAMPLE" \
+    -filter_complex "[0:v]split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" -loop 0 "$WORK/selftest.gif"
+  [[ "$(magic "$WORK/selftest.gif" 3)" == "474946" ]] \
+    || { echo "错误：WXGF 动图通路自检失败，产物不是 GIF" >&2; exit 1; }
+
+  # ffprobe 要能数出帧数，wx-cli 靠它区分动图与静图
+  FRAMES="$("$BUILT_PROBE" -v error -count_frames -select_streams v:0 \
+    -show_entries stream=nb_read_frames -of default=nw=1:nk=1 "$SAMPLE")"
+  [[ "$FRAMES" =~ ^[0-9]+$ ]] && (( FRAMES > 1 )) \
+    || { echo "错误：ffprobe 未能数出帧数（得到 '$FRAMES'）" >&2; exit 1; }
+  echo "WXGF 通路自检通过（PNG 首帧 + $FRAMES 帧 GIF）"
+else
+  echo "提示：本机没有可用的系统 ffmpeg，跳过 WXGF 端到端自检"
+  "$BUILT_PROBE" -hide_banner -version >/dev/null 2>&1 \
+    || { echo "错误：ffprobe 无法运行" >&2; exit 1; }
+fi
 
 # 确认没有非系统动态库依赖，否则换机即挂
 for bin in "$BUILT" "$BUILT_PROBE"; do

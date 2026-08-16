@@ -37,17 +37,34 @@ jobs:
           # ffprobe 用来数 WXGF 帧数，缺了它动态表情出不来
           test -x "$FFPROBE"
           test -f WeChatExporter.app/Contents/Resources/ffmpeg-COPYING.LGPLv2.1
-          # 语音：SILK 解出的 PCM 转 MP3；WXGF：HEVC 解码 + 动图 GIF
-          "$FFMPEG" -hide_banner -encoders | grep -q libmp3lame
-          "$FFMPEG" -hide_banner -encoders | grep -qw gif
-          "$FFMPEG" -hide_banner -decoders | grep -qw hevc
-          "$FFMPEG" -hide_banner -filters | grep -qw palettegen
+          # 逐项核对组件。configure 对拿不到依赖的组件是静默丢弃的，只有运行期
+          # 才以 "Unknown encoder 'xxx'" 炸出来——png 就这样漏过一次（它依赖 zlib）。
+          for e in libmp3lame png gif mjpeg; do
+            "$FFMPEG" -hide_banner -encoders | awk '{print $2}' | grep -qx "$e" \
+              || { echo "缺少 $e 编码器" >&2; exit 1; }
+          done
+          for d in pcm_s16le hevc png; do
+            "$FFMPEG" -hide_banner -decoders | awk '{print $2}' | grep -qx "$d" \
+              || { echo "缺少 $d 解码器" >&2; exit 1; }
+          done
+          "$FFMPEG" -hide_banner -filters | awk '{print $2}' | grep -qx palettegen
           # 端到端跑一遍语音通路，光有组件不代表接得上
           head -c 48000 /dev/zero | "$FFMPEG" -hide_banner -loglevel error \
             -f s16le -ar 24000 -ac 1 -i pipe:0 -b:a 64k -f mp3 pipe:1 > /tmp/selftest.mp3
           test -s /tmp/selftest.mp3
-          # WXGF 动图通路：ffprobe 必须能对裸 HEVC 流数出帧数
-          "$FFPROBE" -hide_banner -version >/dev/null
+          # WXGF 两条通路都端到端跑一遍：光有组件不代表接得上
+          ffmpeg -y -hide_banner -loglevel error -f lavfi \
+            -i testsrc=duration=0.5:size=128x128:rate=24 -c:v hevc_videotoolbox -f hevc /tmp/sample.h265
+          "$FFMPEG" -y -hide_banner -loglevel error -i /tmp/sample.h265 \
+            -frames:v 1 -f image2pipe -vcodec png pipe:1 > /tmp/frame.png
+          test "$(head -c 4 /tmp/frame.png | xxd -p)" = "89504e47"
+          "$FFMPEG" -y -hide_banner -loglevel error -i /tmp/sample.h265 \
+            -filter_complex "[0:v]split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" -loop 0 /tmp/anim.gif
+          test "$(head -c 3 /tmp/anim.gif | xxd -p)" = "474946"
+          # ffprobe 必须能对裸 HEVC 流数出帧数，wx-cli 靠它区分动图与静图
+          FRAMES=$("$FFPROBE" -v error -count_frames -select_streams v:0 \
+            -show_entries stream=nb_read_frames -of default=nw=1:nk=1 /tmp/sample.h265)
+          test "$FRAMES" -gt 1
           # 静态构建：除系统库外不应有任何动态依赖，否则换机即挂
           for bin in "$FFMPEG" "$FFPROBE"; do
             if otool -L "$bin" | tail -n +2 | awk '{print $1}' \

@@ -493,7 +493,10 @@ final class WxCliService {
                 guard let log else { return }
                 // stdout 在 logStdout=false 时仅用于解析（如 JSON），不刷进 UI 日志
                 if !isErr && !logStdout { return }
-                DispatchQueue.main.async { log(trimmed) }
+                // 直接在读管道的线程上调用：`log` 约定为线程安全（AppViewModel 侧只是
+                // 往缓冲区塞一行）。这里若逐行派发到主线程，媒体密集的导出会把主队列
+                // 灌满，界面直接失去响应。
+                log(trimmed)
             }
 
             let process = Process()

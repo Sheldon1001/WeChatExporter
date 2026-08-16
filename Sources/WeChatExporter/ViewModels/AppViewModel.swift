@@ -13,6 +13,11 @@ final class AppViewModel: ObservableObject {
     @Published var searchText = ""
     @Published var exportPath: String = ""
     @Published var logs: [String] = []
+
+    /// 后台日志先进这里，再由 `startLogPump()` 批量刷进 `logs`——
+    /// 否则媒体密集的导出会用日志把主线程冲垮。
+    private let logBuffer = LogBuffer()
+    private var logPumpTask: Task<Void, Never>?
     @Published var isBusy = false
     @Published var statusText = "就绪"
     @Published var isDataReady = false
@@ -100,15 +105,50 @@ final class AppViewModel: ObservableObject {
         let line = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !line.isEmpty else { return }
         logs.append(line)
+        trimLogs()
+    }
+
+    private func appendLogs(_ lines: [String]) {
+        guard !lines.isEmpty else { return }
+        logs.append(contentsOf: lines)
+        trimLogs()
+    }
+
+    private func trimLogs() {
         if logs.count > 300 { logs.removeFirst(logs.count - 300) }
     }
 
-    /// 供 wx-cli / LLDB 等后台任务回调，始终在主线程更新 UI 状态。
-    private func logHandler() -> (String) -> Void {
-        { [weak self] message in
-            Task { @MainActor in
-                self?.appendLog(message)
+    /// 供 wx-cli / LLDB 等后台任务回调。
+    ///
+    /// **返回的闭包不碰主线程**，只往 `logBuffer` 里塞。
+    /// 早先的写法是每来一行就 `Task { @MainActor in … }`，wx-cli 在处理上千张图
+    /// 且每张都报错时，几秒内上万次派发会把主队列彻底堵死，界面变成「未响应」。
+    /// 现在改由 `startLogPump()` 定时批量刷进 UI。
+    private func logHandler() -> @Sendable (String) -> Void {
+        startLogPump()
+        let buffer = logBuffer
+        return { message in buffer.append(message) }
+    }
+
+    /// 启动日志批量刷新循环；连续空闲一段时间后自动收工，避免常驻定时器。
+    private func startLogPump() {
+        guard logPumpTask == nil else { return }
+        logPumpTask = Task { @MainActor [weak self] in
+            var idleTicks = 0
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard let self else { return }
+                let batch = self.logBuffer.drain()
+                if batch.isEmpty {
+                    idleTicks += 1
+                    // 连续空闲 3 秒就停下，下次有日志时会重新拉起
+                    if idleTicks >= 15 { break }
+                } else {
+                    idleTicks = 0
+                    self.appendLogs(batch)
+                }
             }
+            self?.logPumpTask = nil
         }
     }
 

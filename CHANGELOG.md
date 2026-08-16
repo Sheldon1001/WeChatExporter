@@ -17,6 +17,8 @@ All notable changes to this project are documented in this file.
 - **语音归档**：「分类导出」新增 `<联系人>/语音/` 分类，此前语音会被丢进「其他」
 
 ### Fixed
+- **导出大量媒体时界面卡死**。后台逐行把日志派发到主线程，媒体密集的导出几秒内上万行会把主队列灌满，应用变成「未响应」。改为后台缓冲 + 定时批量刷新，并把连续重复的行折叠成「（上一行重复了 N 次）」
+- **内置 ffmpeg 缺少 png 编码器**，导致每张 WXGF 图片都报 `Unknown encoder 'png'` 并保持 `.wxgf` 无法显示。根因是 `--disable-autodetect` 连带关掉了 zlib，而 png 编解码器依赖 zlib，configure 于是静默丢弃了它；已显式 `--enable-zlib`，并把自检改为逐项核对全部编解码器 / 滤镜 / 封装器 + 端到端跑通 PNG 与 GIF 两条通路
 - 补上遗漏的 ffprobe。wx-cli 靠它数 WXGF 的帧数来判断动图还是静图，只给 ffmpeg 不给 ffprobe 会导致动态表情始终出不来
 - 表情与图片下载失败不再逐条刷屏日志，改为按原因汇总一行，并说明「微信 CDN 链接会过期，老消息的表情通常已无法取回」；网络类失败会重试一次
 - 表情下载会校验返回内容确实是图片，避免把加密数据写成打不开的 `.gif`
