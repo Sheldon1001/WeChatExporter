@@ -48,7 +48,7 @@ enum ContactStore {
             let remark = meta?.remark ?? ""
             let display = !remark.isEmpty ? remark : (!nick.isEmpty ? nick : username)
             let ts = sortTS > 0 ? sortTS : lastTS
-            let kind: ContactKind = username.hasSuffix("@chatroom") || type == 2 ? .group : (username.hasPrefix("gh_") ? .official : .friend)
+            let kind = ContactKind.classify(username: username, isGroupType: type == 2)
 
             items.append(ContactItem(
                 id: username,

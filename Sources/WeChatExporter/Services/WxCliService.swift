@@ -677,14 +677,7 @@ final class WxCliService {
             .map { session in
                 let username = session.username
                 let display = cleanDisplayName(session.displayName ?? username, username: username)
-                let kind: ContactKind
-                if username.hasSuffix("@chatroom") {
-                    kind = .group
-                } else if username.hasPrefix("gh_") {
-                    kind = .official
-                } else {
-                    kind = .friend
-                }
+                let kind = ContactKind.classify(username: username)
                 let ts = session.sortTimestamp ?? 0
                 return ContactItem(
                     id: username,

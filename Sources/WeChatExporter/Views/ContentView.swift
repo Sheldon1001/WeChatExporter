@@ -134,24 +134,14 @@ struct ContentView: View {
                 .padding(16)
 
             List(selection: $model.selectedIDs) {
-                Section {
-                    ForEach(model.filteredContacts) { contact in
-                        ContactRow(contact: contact)
-                            .tag(contact.id)
-                    }
-                } header: {
-                    HStack {
-                        Text("会话")
-                            .font(.subheadline.weight(.semibold))
-                            .textCase(.uppercase)
-                            .tracking(0.5)
-                        Spacer()
-                        Text("\(model.filteredContacts.count)")
-                            .font(AppTheme.monoFontSm.weight(.semibold))
-                            .foregroundStyle(AppTheme.accent)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 3)
-                            .background(AppTheme.accentSoft, in: Capsule())
+                ForEach(model.groupedContacts) { group in
+                    Section {
+                        ForEach(group.items) { contact in
+                            ContactRow(contact: contact)
+                                .tag(contact.id)
+                        }
+                    } header: {
+                        sectionHeader(for: group)
                     }
                 }
             }
@@ -161,6 +151,43 @@ struct ContentView: View {
         .searchable(text: $model.searchText, prompt: "搜索联系人、群聊、备注")
         .toolbar { toolbarContent }
         .navigationTitle("微信聊天记录导出")
+    }
+
+    /// 分组标题：类型图标 + 名称 + 已选数 + 总数徽标（点徽标可全选/取消该类）。
+    ///
+    /// 折叠交给 macOS 的 List 自己做——它把带 Section 的 List 渲染成 NSOutlineView，
+    /// 原生就带折叠三角。自己再加一套折叠状态会和它打架（试过，两边状态对不上）。
+    private func sectionHeader(for group: AppViewModel.ContactGroup) -> some View {
+        let selected = model.selectionCount(for: group.kind)
+        return HStack(spacing: 6) {
+            Image(systemName: group.kind.icon)
+                .font(.caption)
+                .foregroundStyle(AppTheme.accent)
+            Text(group.kind.rawValue)
+                .font(.subheadline.weight(.semibold))
+                .tracking(0.5)
+
+            Spacer()
+
+            if selected > 0 {
+                Text("已选 \(selected)")
+                    .font(AppTheme.monoFontSm)
+                    .foregroundStyle(AppTheme.accent)
+            }
+
+            Button {
+                model.toggleSelection(for: group.kind)
+            } label: {
+                Text("\(group.items.count)")
+                    .font(AppTheme.monoFontSm.weight(.semibold))
+                    .foregroundStyle(AppTheme.accent)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(AppTheme.accentSoft, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("全选或取消该类下的 \(group.items.count) 个会话")
+        }
     }
 
     private var headerCard: some View {

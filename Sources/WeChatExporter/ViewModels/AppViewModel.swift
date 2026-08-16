@@ -101,6 +101,34 @@ final class AppViewModel: ObservableObject {
         }
     }
 
+    /// 会话按类型分组，供侧栏分列显示。组内保持原有的按时间排序，空组不出现。
+    struct ContactGroup: Identifiable {
+        let kind: ContactKind
+        let items: [ContactItem]
+        var id: String { kind.rawValue }
+    }
+
+    var groupedContacts: [ContactGroup] {
+        Dictionary(grouping: filteredContacts, by: \.kind)
+            .map { ContactGroup(kind: $0.key, items: $0.value) }
+            .sorted { $0.kind.sortOrder < $1.kind.sortOrder }
+    }
+
+    /// 选中某一类下的全部会话——公众号有三百多个，逐个点不现实。
+    func toggleSelection(for kind: ContactKind) {
+        let ids = Set(filteredContacts.filter { $0.kind == kind }.map(\.id))
+        guard !ids.isEmpty else { return }
+        if ids.isSubset(of: selectedIDs) {
+            selectedIDs.subtract(ids)
+        } else {
+            selectedIDs.formUnion(ids)
+        }
+    }
+
+    func selectionCount(for kind: ContactKind) -> Int {
+        filteredContacts.filter { $0.kind == kind && selectedIDs.contains($0.id) }.count
+    }
+
     func appendLog(_ message: String) {
         let line = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !line.isEmpty else { return }

@@ -115,6 +115,12 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 
 **两端分叉**：Windows 的 `SingleFileExporter.cs` 一直是主路径且只出 HTML；macOS 这边 HTML 只是四选一里的一种。两边的 HTML 结构和样式并不一致，改一侧不会自动同步到另一侧。
 
+### 会话分类
+
+`ContactKind.classify(username:isGroupType:)`（`Models/ContactItem.swift`）是**唯一**的分类入口，wx-cli 与 native 两个后端都走它——早先两边各写了一份 if-else，很容易分叉。判定依据（实测 875 个会话：公众号 360、好友 316、群聊 136、其他 63）：`*@chatroom` 是群聊，`gh_*` 是公众号，保留字与 `@` 开头是系统会话，含 `@` 的（`*@openim` / `*@kefu.openim`）是企业微信与客服，其余归好友。
+
+侧栏按 `AppViewModel.groupedContacts` 分组显示，组内保持按时间排序。**折叠交给系统**：macOS 的 `List` + `Section` 会渲染成 `NSOutlineView`，原生自带折叠三角；自己再维护一套 `collapsedKinds` 会和它打架，两边状态对不上（试过，表现为默认折叠状态与代码里写的完全不符）。
+
 ### 进度与日志
 
 `LoadProgressTracker`（`Models/LoadProgress.swift`）合并「时间预估」与「真实分页进度」，保证进度条单调不回退：无总量时按耗时爬到 ≤30%，解密阶段 ≤35%，拿到 `paging.total` 后映射 35%–99%。
