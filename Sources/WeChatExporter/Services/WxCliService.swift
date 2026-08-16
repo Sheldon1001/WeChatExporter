@@ -345,9 +345,9 @@ final class WxCliService {
         Self.normalizeExportArtifacts(in: outputDir, log: log)
         if includeMedia {
             onProgress?("正在下载表情…")
-            _ = await EmojiExporter.exportEmojis(in: outputDir, log: log)
+            _ = await EmojiExporter.exportEmojis(in: outputDir, log: log, onProgress: onProgress)
             onProgress?("正在处理图片…")
-            _ = await ImageExporter.exportImages(in: outputDir, log: log)
+            _ = await ImageExporter.exportImages(in: outputDir, log: log, onProgress: onProgress)
             Self.normalizeExportArtifacts(in: outputDir, log: log)
         }
         let count = Self.countExportedMessages(in: outputDir)

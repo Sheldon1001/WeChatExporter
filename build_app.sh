@@ -9,7 +9,7 @@ ICON_SRC="$ROOT/assets/AppIcon.icns"
 ICON_PNG="$ROOT/assets/AppIcon.png"
 WX_CLI_VERSION="${WX_CLI_VERSION:-vendor}"
 APP_VERSION="${APP_VERSION:-2.14.0}"
-APP_BUILD="${APP_BUILD:-30}"
+APP_BUILD="${APP_BUILD:-31}"
 
 echo "编译原生 macOS 应用…"
 cd "$ROOT"

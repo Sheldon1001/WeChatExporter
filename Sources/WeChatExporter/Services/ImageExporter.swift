@@ -6,7 +6,16 @@ enum ImageExporter {
     private static let imgTagPattern = #"<img\b[^>]*(?:/>|>[^<]*</img>)"#
     private static let attrPattern = #"(\w+)="([^"]*)""#
 
-    static func exportImages(in outputDir: URL, log: @escaping (String) -> Void) async -> Int {
+    /// 图片比表情大，并发开小一点，免得把带宽和连接数打满。
+    private static let concurrency = 6
+    /// 整个图片阶段的时间预算——原图过期是常态，不能让它们无限拖住导出。
+    private static let timeBudget: TimeInterval = 180
+
+    static func exportImages(
+        in outputDir: URL,
+        log: @escaping (String) -> Void,
+        onProgress: (@Sendable (String) -> Void)? = nil
+    ) async -> Int {
         let jsonURL = outputDir.appendingPathComponent("chat.json")
         guard FileManager.default.fileExists(atPath: jsonURL.path),
               let data = try? Data(contentsOf: jsonURL),
@@ -19,38 +28,71 @@ enum ImageExporter {
         let imageDir = outputDir.appendingPathComponent("media/images", isDirectory: true)
         try? FileManager.default.createDirectory(at: imageDir, withIntermediateDirectories: true)
 
-        var processed = 0
-        var failed = 0
+        // 与表情同样的道理：同一张图可能被多条消息引用（转发、引用回复），
+        // 按标识去重后再下载，否则会把同一张图反复拉好几遍。
         var seenNames = Set<String>()
+        var jobForKey: [String: (attrs: [String: String], filename: String)] = [:]
+        var refs: [(itemIndex: Int, key: String)] = []
 
         for index in items.indices {
-            let xmlSources = imageXMLSources(from: items[index])
-            guard !xmlSources.isEmpty else { continue }
-
-            for xml in xmlSources {
+            for xml in imageXMLSources(from: items[index]) {
                 let attrs = parseAttributes(from: xml)
-                let filename = uniqueFilename(base: makeFilename(attrs: attrs, fallbackIndex: index), seen: &seenNames)
-                let dest = imageDir.appendingPathComponent(filename)
-                let mediaPath = "media/images/\(filename)"
-
-                if FileManager.default.fileExists(atPath: dest.path) {
-                    appendMediaFile(to: &items[index], path: mediaPath)
-                    processed += 1
-                    continue
+                let key = dedupKey(attrs: attrs, fallbackIndex: index)
+                if jobForKey[key] == nil {
+                    let name = uniqueFilename(base: makeFilename(attrs: attrs, fallbackIndex: index), seen: &seenNames)
+                    jobForKey[key] = (attrs, name)
                 }
-
-                if await downloadImage(attrs: attrs, to: dest) {
-                    appendMediaFile(to: &items[index], path: mediaPath)
-                    processed += 1
-                } else {
-                    // 逐张打日志会把日志面板刷爆，这里只累计，最后汇总一行
-                    failed += 1
-                }
+                refs.append((index, key))
             }
+        }
+
+        let fm = FileManager.default
+        var readyNames = Set<String>()
+        var pending: [(attrs: [String: String], filename: String)] = []
+        for (_, job) in jobForKey {
+            if fm.fileExists(atPath: imageDir.appendingPathComponent(job.filename).path) {
+                readyNames.insert(job.filename)
+            } else {
+                pending.append(job)
+            }
+        }
+
+        if !pending.isEmpty {
+            log("图片：\(refs.count) 处引用，去重后需处理 \(pending.count) 张")
+        }
+
+        let dir = imageDir
+        let outcomes = await ConcurrentMap.run(
+            pending,
+            concurrency: concurrency,
+            budget: timeBudget,
+            onProgress: { done, total in onProgress?("正在处理图片 \(done)/\(total)") }
+        ) { job in
+            await downloadImage(attrs: job.attrs, to: dir.appendingPathComponent(job.filename))
+        }
+
+        var failed = 0
+        var skipped = 0
+        for (job, outcome) in zip(pending, outcomes) {
+            switch outcome {
+            case .some(true): readyNames.insert(job.filename)
+            case .some(false): failed += 1
+            case nil: skipped += 1
+            }
+        }
+
+        var processed = 0
+        for ref in refs {
+            guard let job = jobForKey[ref.key], readyNames.contains(job.filename) else { continue }
+            appendMediaFile(to: &items[ref.itemIndex], path: "media/images/\(job.filename)")
+            processed += 1
         }
 
         if failed > 0 {
             log("图片未能取回 \(failed) 张。多为原图已过期或只在手机上保留，在微信里打开对应聊天可重新下载后再导出。")
+        }
+        if skipped > 0 {
+            log("图片处理已达 \(Int(timeBudget)) 秒上限，跳过剩余 \(skipped) 张，不再继续等待。")
         }
 
         let decoded = await DatImageDecoder.decodeDatFiles(in: outputDir, log: log)
@@ -179,11 +221,20 @@ enum ImageExporter {
         }
     }
 
+    /// 同一张图可能被多条消息引用（转发、引用回复），按内容标识去重后只处理一次。
+    private static func dedupKey(attrs: [String: String], fallbackIndex: Int) -> String {
+        for key in ["md5", "aeskey", "cdnbigimgurl", "cdnmidimgurl", "cdnthumburl"] {
+            if let value = attrs[key], !value.isEmpty, value != "null" { return "\(key):\(value)" }
+        }
+        return "index:\(fallbackIndex)"
+    }
+
     private static func fetchURL(_ urlString: String) async -> Data? {
         let cleaned = unescapeXML(urlString)
         guard let url = URL(string: cleaned) else { return nil }
         var request = URLRequest(url: url)
-        request.timeoutInterval = 30
+        // 30 秒的默认超时会让失效链接白白拖住整个导出
+        request.timeoutInterval = 15
         request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
         do {
             let (data, response) = try await URLSession.shared.data(for: request)

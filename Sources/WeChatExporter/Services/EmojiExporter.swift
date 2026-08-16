@@ -5,7 +5,16 @@ enum EmojiExporter {
     private static let emojiTagPattern = #"<emoji\b[^>]*(?:/>|>[^<]*</emoji>)"#
     private static let attrPattern = #"(\w+)="([^"]*)""#
 
-    static func exportEmojis(in outputDir: URL, log: @escaping (String) -> Void) async -> Int {
+    /// 同时下载多少个。表情都是几十 KB 的小文件，瓶颈全在往返延迟上。
+    private static let concurrency = 8
+    /// 整个表情阶段的时间预算。过期的 CDN 链接是常态，不能让它们无限拖住导出。
+    private static let timeBudget: TimeInterval = 120
+
+    static func exportEmojis(
+        in outputDir: URL,
+        log: @escaping (String) -> Void,
+        onProgress: (@Sendable (String) -> Void)? = nil
+    ) async -> Int {
         let jsonURL = outputDir.appendingPathComponent("chat.json")
         guard FileManager.default.fileExists(atPath: jsonURL.path),
               let data = try? Data(contentsOf: jsonURL),
@@ -18,42 +27,86 @@ enum EmojiExporter {
         let emojiDir = outputDir.appendingPathComponent("media/emojis", isDirectory: true)
         try? FileManager.default.createDirectory(at: emojiDir, withIntermediateDirectories: true)
 
-        var downloaded = 0
+        // ── 第一步：把所有表情引用收集起来，**按 URL 去重**。
+        //
+        // 群聊里同一张表情会被反复发送——实测一个 74479 条消息的群有 13780 处表情引用，
+        // 但唯一 URL 只有 1190 个，最热门的一张出现了 278 次。早先的写法给每次出现都用
+        // `uniqueFilename` 起一个新名字（md5_2.gif、md5_3.gif…），于是 `fileExists` 永远
+        // 命不中，同一张表情被重复下载几百遍，导出就卡死在这一步。
         var seenNames = Set<String>()
-        // 表情下载失败是常态：微信 CDN 链接会过期，老消息的表情多半已经取不回来了。
-        // 逐条刷屏没有意义，这里只统计原因，最后汇总一行。
-        var failures: [String: Int] = [:]
+        var jobForURL: [String: (url: URL, filename: String)] = [:]
+        var refs: [(itemIndex: Int, urlKey: String)] = []
         var noURLCount = 0
 
         for index in items.indices {
-            let xmlSources = emojiXMLSources(from: items[index])
-            guard !xmlSources.isEmpty else { continue }
-
-            for xml in xmlSources {
+            for xml in emojiXMLSources(from: items[index]) {
                 let attrs = parseAttributes(from: xml)
-                guard let urlString = pickURL(from: attrs),
-                      let url = URL(string: unescapeXML(urlString)) else {
+                guard let raw = pickURL(from: attrs) else {
                     noURLCount += 1
                     continue
                 }
-
-                let filename = uniqueFilename(base: makeFilename(attrs: attrs, fallbackIndex: index), seen: &seenNames)
-                let dest = emojiDir.appendingPathComponent(filename)
-
-                if FileManager.default.fileExists(atPath: dest.path) {
-                    appendMediaFile(to: &items[index], path: "media/emojis/\(filename)")
-                    downloaded += 1
+                let urlString = unescapeXML(raw)
+                guard let url = URL(string: urlString) else {
+                    noURLCount += 1
                     continue
                 }
-
-                switch await download(url: url, to: dest) {
-                case .success:
-                    appendMediaFile(to: &items[index], path: "media/emojis/\(filename)")
-                    downloaded += 1
-                case .failure(let reason):
-                    failures[reason, default: 0] += 1
+                if jobForURL[urlString] == nil {
+                    let name = uniqueFilename(base: makeFilename(attrs: attrs, fallbackIndex: index), seen: &seenNames)
+                    jobForURL[urlString] = (url, name)
                 }
+                refs.append((index, urlString))
             }
+        }
+
+        guard !jobForURL.isEmpty || noURLCount > 0 else { return 0 }
+
+        // ── 第二步：只下载还不在盘上的那些，并发跑
+        let fm = FileManager.default
+        var readyNames = Set<String>()
+        var pending: [(url: URL, filename: String)] = []
+        for (_, job) in jobForURL {
+            if fm.fileExists(atPath: emojiDir.appendingPathComponent(job.filename).path) {
+                readyNames.insert(job.filename)
+            } else {
+                pending.append(job)
+            }
+        }
+
+        if !pending.isEmpty {
+            log("表情：\(refs.count) 处引用，去重后需下载 \(pending.count) 个")
+        }
+
+        let dir = emojiDir
+        let outcomes = await ConcurrentMap.run(
+            pending,
+            concurrency: concurrency,
+            budget: timeBudget,
+            onProgress: { done, total in onProgress?("正在下载表情 \(done)/\(total)") }
+        ) { job in
+            await download(url: job.url, to: dir.appendingPathComponent(job.filename))
+        }
+
+        // 表情下载失败是常态：微信 CDN 链接会过期，老消息的表情多半已经取不回来了。
+        // 逐条刷屏没有意义，这里只统计原因，最后汇总一行。
+        var failures: [String: Int] = [:]
+        var skipped = 0
+        for (job, outcome) in zip(pending, outcomes) {
+            switch outcome {
+            case .success:
+                readyNames.insert(job.filename)
+            case .failure(let reason):
+                failures[reason, default: 0] += 1
+            case nil:
+                skipped += 1
+            }
+        }
+
+        // ── 第三步：把下载成功的表情挂回引用它的每一条消息
+        var downloaded = 0
+        for ref in refs {
+            guard let job = jobForURL[ref.urlKey], readyNames.contains(job.filename) else { continue }
+            appendMediaFile(to: &items[ref.itemIndex], path: "media/emojis/\(job.filename)")
+            downloaded += 1
         }
 
         if !failures.isEmpty {
@@ -63,6 +116,9 @@ enum EmojiExporter {
                 .joined(separator: "、")
             let total = failures.values.reduce(0, +)
             log("表情未能下载 \(total) 个（\(detail)）。微信 CDN 链接会过期，老消息的表情通常已无法取回，不影响其他内容导出。")
+        }
+        if skipped > 0 {
+            log("表情下载已达 \(Int(timeBudget)) 秒上限，跳过剩余 \(skipped) 个，不再继续等待。")
         }
         if noURLCount > 0 {
             log("另有 \(noURLCount) 个表情在聊天记录里没有可用下载地址，已跳过。")
@@ -220,7 +276,8 @@ enum EmojiExporter {
 
         for attempt in 1...max(1, attempts) {
             var request = URLRequest(url: url)
-            request.timeoutInterval = 30
+            // 表情就是几十 KB 的小文件，30 秒的默认超时只会让失效链接白白拖住导出
+            request.timeoutInterval = 12
             request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
 
             do {

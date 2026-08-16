@@ -87,7 +87,11 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 
 **别再把 txt 和 json 都跑成含媒体。** wx-cli 每一趟 `export` 都会完整重做图片解密与语音转码，跑两趟等于媒体活干两遍（实测 4413 个媒体文件的群聊：72s + 74s）。所以 `export(needsPlainText:)` 在网页导出下为 `false`，直接省掉 txt 那趟。注意**不能改用 `--no-media` 来省**：txt 里的 `[图片1] media/xxx.png` 附件索引会整段消失（实测少 4416 行），分类导出与全部导出要把 chat.txt 交给用户，必须跑真的那一趟。含媒体时两趟都会带 `--parallel`（`WxCliService.mediaParallelism`，默认 `min(CPU,4)` 太保守，实测 74s → 41s）。
 
-进度条靠 `WxCliService.parseMediaProgress` 解析 stderr 的 `media: image 610/762`，经 `AppViewModel.exportProgressHandler` 映射到「会话区间的 10%–90%」，两头留给读消息与整理文本。不接这个的话，含媒体的大会话导出期间界面就只有一个不动的「处理中…」。后处理链：`normalizeExportArtifacts`（把 `联系人_日期.json` 统一复制成 `chat.json`/`chat.txt`，并从 JSON 生成带 BOM 的 `chat.csv`）、含媒体时再跑 `EmojiExporter` → `ImageExporter`（内部调 `DatImageDecoder` 解 `.dat`、`WXGFTranscoder` 转 WXGF）。
+进度条靠 `WxCliService.parseMediaProgress` 解析 stderr 的 `media: image 610/762`，经 `AppViewModel.exportProgressHandler` 映射到「会话区间的 10%–90%」，两头留给读消息与整理文本。不接这个的话，含媒体的大会话导出期间界面就只有一个不动的「处理中…」。
+
+**`EmojiExporter` / `ImageExporter` 里下载前一定要先按内容去重。** 群聊里同一张表情会被反复发送——实测一个群有 3095 处表情引用，唯一 URL 只有 1190 个，最热的一张出现 139 次。早先的写法给每次出现都用 `uniqueFilename` 起新名字（`md5_2.gif`、`md5_3.gif`…），`fileExists` 因此永远命不中，同一张图被重复下载上百遍，导出直接卡死在「正在下载表情」。现在先收集引用、按 URL（图片按 md5/aeskey）建唯一任务表，下载完再把同一个文件挂回所有引用它的消息。
+
+这两个服务都用 `ConcurrentMap.run` 跑批（表情 8 路、图片 6 路并发），并各自设了时间预算（120s / 180s）。预算是必须的：微信 CDN 链接过期是常态，没有上限的话几千个失效链接足以让导出永远跑不完。单请求超时也要短——表情只有几十 KB，默认 30 秒纯属浪费。后处理链：`normalizeExportArtifacts`（把 `联系人_日期.json` 统一复制成 `chat.json`/`chat.txt`，并从 JSON 生成带 BOM 的 `chat.csv`）、含媒体时再跑 `EmojiExporter` → `ImageExporter`（内部调 `DatImageDecoder` 解 `.dat`、`WXGFTranscoder` 转 WXGF）。
 
 `ExportMode`（持久化在 UserDefaults `export.mode`）：
 - `categorized`（默认）→ `MediaOrganizer.organize` 归档到 `<联系人>/{文字,图片,视频,语音,其他}/`
