@@ -21,8 +21,18 @@ enum WXGFTranscoder {
             return nil
         }
 
-        if let output = transcodeWithFFmpeg(hevcData: hevc, outputBaseURL: base, log: log) {
-            return output
+        // 优先转成动图 GIF——WXGF 本来就是动态表情格式，取单帧会丢掉动画
+        if let ffmpeg = locateFFmpeg() {
+            if let output = transcodeWithFFmpeg(
+                ffmpeg: ffmpeg, hevcData: hevc, outputBaseURL: base, animated: true, log: log
+            ) {
+                return output
+            }
+            if let output = transcodeWithFFmpeg(
+                ffmpeg: ffmpeg, hevcData: hevc, outputBaseURL: base, animated: false, log: log
+            ) {
+                return output
+            }
         }
 
         #if os(macOS)
@@ -58,16 +68,18 @@ enum WXGFTranscoder {
         return nil
     }
 
+    /// - Parameter animated: 为 true 时用 palettegen/paletteuse 转成动图 GIF；为 false 时只取首帧 JPEG。
     private static func transcodeWithFFmpeg(
+        ffmpeg: URL,
         hevcData: Data,
         outputBaseURL: URL,
+        animated: Bool,
         log: ((String) -> Void)?
     ) -> URL? {
-        guard let ffmpeg = locateFFmpeg() else { return nil }
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("wxgf-\(UUID().uuidString)", isDirectory: true)
         let inputURL = tempDir.appendingPathComponent("frame.h265")
-        let outputURL = outputBaseURL.appendingPathExtension("jpg")
+        let outputURL = outputBaseURL.appendingPathExtension(animated ? "gif" : "jpg")
 
         do {
             try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
@@ -76,17 +88,29 @@ enum WXGFTranscoder {
 
             let process = Process()
             process.executableURL = ffmpeg
-            process.arguments = [
-                "-y", "-hide_banner", "-loglevel", "error",
-                "-i", inputURL.path,
-                "-frames:v", "1",
-                outputURL.path,
-            ]
+            if animated {
+                process.arguments = [
+                    "-y", "-hide_banner", "-loglevel", "error",
+                    "-i", inputURL.path,
+                    "-filter_complex", "[0:v]split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse",
+                    "-loop", "0",
+                    outputURL.path,
+                ]
+            } else {
+                process.arguments = [
+                    "-y", "-hide_banner", "-loglevel", "error",
+                    "-i", inputURL.path,
+                    "-frames:v", "1",
+                    outputURL.path,
+                ]
+            }
             try process.run()
             process.waitUntilExit()
 
             guard process.terminationStatus == 0,
-                  FileManager.default.fileExists(atPath: outputURL.path) else {
+                  let size = try? FileManager.default.attributesOfItem(atPath: outputURL.path)[.size] as? Int,
+                  size > 0 else {
+                try? FileManager.default.removeItem(at: outputURL)
                 return nil
             }
             log?("已转码 WXGF 图片：\(outputURL.lastPathComponent)")
@@ -129,6 +153,8 @@ enum WXGFTranscoder {
 
     private static func locateFFmpeg() -> URL? {
         let fm = FileManager.default
+        // 优先用应用包内随附的 ffmpeg，保证未装 ffmpeg 的机器也能出动图
+        if let bundled = WxCliService.bundledFFmpeg() { return bundled }
         let envPaths = ProcessInfo.processInfo.environment["PATH"]?
             .split(separator: ":")
             .map(String.init) ?? []

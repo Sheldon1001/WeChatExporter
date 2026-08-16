@@ -8,8 +8,8 @@ BINARY="$ROOT/.build/release/WeChatExporter"
 ICON_SRC="$ROOT/assets/AppIcon.icns"
 ICON_PNG="$ROOT/assets/AppIcon.png"
 WX_CLI_VERSION="${WX_CLI_VERSION:-vendor}"
-APP_VERSION="${APP_VERSION:-2.13.0}"
-APP_BUILD="${APP_BUILD:-26}"
+APP_VERSION="${APP_VERSION:-2.14.0}"
+APP_BUILD="${APP_BUILD:-27}"
 
 echo "编译原生 macOS 应用…"
 cd "$ROOT"
@@ -22,6 +22,19 @@ chmod +x "$APP_DIR/Contents/MacOS/$APP_NAME"
 echo "打包内置 wx-cli…"
 bash "$ROOT/scripts/bundle_wx_cli.sh" "$APP_DIR/Contents/Resources"
 chmod +x "$APP_DIR/Contents/Resources/wx-cli"
+
+# ffmpeg 供 wx-cli 把微信语音（SILK）转成 MP3，并解码 WXGF 动态表情。
+# 缺失时 wx-cli 会自动降级导出原始 .silk，不会中断导出。
+if [[ -f "$ROOT/vendor/macos/ffmpeg" ]]; then
+  echo "打包内置 ffmpeg…"
+  cp "$ROOT/vendor/macos/ffmpeg" "$APP_DIR/Contents/Resources/ffmpeg"
+  chmod +x "$APP_DIR/Contents/Resources/ffmpeg"
+  # LGPL v2.1 要求随分发提供许可证全文
+  cp "$ROOT/vendor/macos/ffmpeg-COPYING.LGPLv2.1" "$APP_DIR/Contents/Resources/ffmpeg-COPYING.LGPLv2.1"
+else
+  echo "警告：未找到 vendor/macos/ffmpeg，语音将以原始 SILK 格式导出"
+  echo "      执行 bash scripts/build_ffmpeg_minimal.sh 可构建它"
+fi
 
 bash "$ROOT/scripts/prepare_icon.sh"
 if [[ -f "$ICON_SRC" ]]; then

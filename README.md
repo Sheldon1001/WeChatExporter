@@ -30,8 +30,13 @@
 - 图形界面：搜索、多选联系人/群聊
 - **内置 wx-cli**：安装即用，无需单独安装命令行工具
 - **就绪状态提示**：界面顶部显示当前进度（是否已完成「准备数据」）
-- **单文件导出**：每个会话生成一个 `.html` 文件，文字与媒体（图片、表情、语音、视频）全部内嵌，浏览器直接打开
-- **可选媒体导出**：勾选后将媒体 base64 写入 HTML，并额外导出全部表情包画廊；WXGF 图片会自动尝试转码后显示（体积更大，耗时更长）
+- **四种导出方式**（在设置中选择）：
+  - **分类导出**（默认）：文字、图片、视频、语音分别归档到独立文件夹
+  - **只导出文字**：仅 txt / json / csv，速度最快
+  - **全部导出**：文字加原始媒体文件，保持目录结构
+  - **网页导出**：生成可用浏览器直接打开的 `.html`，图片、表情、语音内嵌，视频与大附件放在同名 `_media/` 文件夹里外链，链接可点击
+- **语音可播放**：内置 ffmpeg 自动把微信的 SILK 语音转成 MP3，网页导出中直接可播
+- **动态表情会动**：WXGF 表情转码为动图 GIF，而非单帧静图
 - 自动检测微信数据目录
 - 通过 LLDB / 内存扫描捕获密钥并解密（微信 4.x SQLCipher）
 - 导出 TXT / CSV / JSON
@@ -171,3 +176,25 @@ codesign --force --deep --sign - /Applications/WeChatExporter.app
 ## License
 
 MIT
+
+### 第三方组件
+
+发布包内附带以下预编译二进制，它们各自的许可与本项目的 MIT 许可相互独立：
+
+| 组件 | 用途 | 许可 |
+|---|---|---|
+| `wx-cli` (macOS) | 微信数据库解密与导出 | 见 [vendor/README.md](vendor/README.md) |
+| `wx.exe` (Windows) | 同上 | 见 [vendor/README.md](vendor/README.md) |
+| `ffmpeg` (macOS) | 语音 SILK → MP3、WXGF 动态表情解码 | **LGPL v2.1** |
+
+其中 ffmpeg 为最小化静态构建（FFmpeg 8.0.1 + LAME 3.100），**未启用 GPL**。
+本项目以独立子进程方式调用它，不做链接，因此不构成衍生作品。
+
+许可证全文见 `WeChatExporter.app/Contents/Resources/ffmpeg-COPYING.LGPLv2.1`。
+如需重新构建或重新链接该二进制（LGPL v2.1 §6），执行：
+
+```bash
+bash scripts/build_ffmpeg_minimal.sh
+```
+
+该脚本锁定了上游版本与完整的 configure 参数，详见 [vendor/README.md](vendor/README.md)。

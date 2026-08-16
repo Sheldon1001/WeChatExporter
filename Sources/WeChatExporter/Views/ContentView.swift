@@ -335,7 +335,7 @@ struct ContentView: View {
 
                         GuideStep(number: 1, text: "首次使用点击「准备数据」（会重启微信）")
                         GuideStep(number: 2, text: "在左侧列表中选择一个或多个联系人")
-                        GuideStep(number: 3, text: "点击「导出选中」生成 HTML 文件")
+                        GuideStep(number: 3, text: "点击「导出选中」，按设置中选定的方式导出")
                         GuideStep(number: 4, text: "导出路径和媒体选项请在「设置」中调整", highlight: true)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)

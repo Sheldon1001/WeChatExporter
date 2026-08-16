@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.14.0] - 2026-08-17
+
+### Added
+- **网页导出**（macOS）：新增第四种导出方式，生成可用浏览器直接打开的 HTML
+  - 图片、表情、语音以 base64 内嵌，单个文件即可离线阅读
+  - 视频与大附件（>8 MB）拷进同名 `_media/` 文件夹外链，避免生成 GB 级 HTML 拖死浏览器
+  - 正文中的 http(s) 链接自动变为可点击，按 RFC 3986 字符集切分，紧跟汉字或包在括号里都能正确断句
+  - 表情包同时输出一张画廊网页
+- **语音可播放**（macOS）：随包内置最小化静态 ffmpeg（2.7 MB），wx-cli 自动把微信 SILK 语音转成 MP3
+  - 未内置 ffmpeg 时 wx-cli 会降级导出原始 `.silk`，导出不会中断
+- **动态表情会动**（macOS）：WXGF 表情改用 `palettegen`/`paletteuse` 转成动图 GIF，此前只能取单帧静图
+- **语音归档**：「分类导出」新增 `<联系人>/语音/` 分类，此前语音会被丢进「其他」
+
+### Changed
+- 表情类消息不再把原始 XML 当正文渲染进 HTML
+- 订正多处过期文案：主界面与设置页的引导步骤不再声称「生成 HTML 文件」，`ExportMode` 的注释与描述与实现对齐，README 功能列表按四种导出方式重写
+
+### Notes
+- 内置 ffmpeg 为 LGPL v2.1 最小化静态构建（未启用 GPL），以独立子进程方式调用，不影响本项目的 MIT 许可
+- 可用 `scripts/build_ffmpeg_minimal.sh` 重新构建，详见 `vendor/README.md`
+
 ## [2.13.0] - 2026-08-06
 
 ### Added

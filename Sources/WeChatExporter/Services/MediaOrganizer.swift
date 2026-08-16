@@ -1,12 +1,13 @@
 import Foundation
 
-/// 将导出目录中的文件按类型归档到 文字 / 图片 / 视频 / 其他 文件夹。
+/// 将导出目录中的文件按类型归档到 文字 / 图片 / 视频 / 语音 / 其他 文件夹。
 enum MediaOrganizer {
 
     struct Result {
         let textCount: Int
         let imageCount: Int
         let videoCount: Int
+        let audioCount: Int
         let otherCount: Int
     }
 
@@ -16,6 +17,8 @@ enum MediaOrganizer {
     private static let imageExts: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "heic", "tiff"]
     /// 视频类扩展名
     private static let videoExts: Set<String> = ["mp4", "mov", "avi", "mkv", "webm", "3gp", "flv", "wmv", "m4v"]
+    /// 语音类扩展名。`silk` 是微信原始语音格式，ffmpeg 缺失时 wx-cli 会降级导出它
+    private static let audioExts: Set<String> = ["mp3", "m4a", "aac", "wav", "ogg", "opus", "amr", "silk"]
 
     /// 把 sourceDir 下的文件按类型移动到 destDir/<contactName>/ 下的分类文件夹。
     /// 返回各分类文件数。
@@ -31,15 +34,17 @@ enum MediaOrganizer {
         let textDir = contactDir.appendingPathComponent("文字", isDirectory: true)
         let imageDir = contactDir.appendingPathComponent("图片", isDirectory: true)
         let videoDir = contactDir.appendingPathComponent("视频", isDirectory: true)
+        let audioDir = contactDir.appendingPathComponent("语音", isDirectory: true)
         let otherDir = contactDir.appendingPathComponent("其他", isDirectory: true)
 
-        for dir in [textDir, imageDir, videoDir, otherDir] {
+        for dir in [textDir, imageDir, videoDir, audioDir, otherDir] {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         }
 
         var textCount = 0
         var imageCount = 0
         var videoCount = 0
+        var audioCount = 0
         var otherCount = 0
 
         // 递归收集所有文件
@@ -56,6 +61,9 @@ enum MediaOrganizer {
             } else if videoExts.contains(ext) {
                 dest = videoDir.appendingPathComponent(file.lastPathComponent)
                 videoCount += 1
+            } else if audioExts.contains(ext) {
+                dest = audioDir.appendingPathComponent(file.lastPathComponent)
+                audioCount += 1
             } else {
                 dest = otherDir.appendingPathComponent(file.lastPathComponent)
                 otherCount += 1
@@ -72,15 +80,18 @@ enum MediaOrganizer {
 
         // 清理空目录
         removeEmptyDirs(in: sourceDir)
-        removeIfEmpty(otherDir)
+        for dir in [videoDir, audioDir, otherDir] {
+            removeIfEmpty(dir)
+        }
 
         let result = Result(
             textCount: textCount,
             imageCount: imageCount,
             videoCount: videoCount,
+            audioCount: audioCount,
             otherCount: otherCount
         )
-        log("归档完成：文字 \(textCount) 个、图片 \(imageCount) 个、视频 \(videoCount) 个、其他 \(otherCount) 个 → \(contactDir.path)")
+        log("归档完成：文字 \(textCount) 个、图片 \(imageCount) 个、视频 \(videoCount) 个、语音 \(audioCount) 个、其他 \(otherCount) 个 → \(contactDir.path)")
         return result
     }
 

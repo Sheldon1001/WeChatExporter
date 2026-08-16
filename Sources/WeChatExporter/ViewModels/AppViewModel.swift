@@ -327,7 +327,7 @@ final class AppViewModel: ObservableObject {
                             contactName: contact.displayName,
                             log: logHandler()
                         )
-                        summary.append("• \(contact.displayName)：\(count) 条（文字 \(result.textCount)、图片 \(result.imageCount)、视频 \(result.videoCount)、其他 \(result.otherCount)）")
+                        summary.append("• \(contact.displayName)：\(count) 条（文字 \(result.textCount)、图片 \(result.imageCount)、视频 \(result.videoCount)、语音 \(result.audioCount)、其他 \(result.otherCount)）")
                     case .textOnly:
                         // 只导出文字文件
                         let contactDir = base.appendingPathComponent(contact.displayName, isDirectory: true)
@@ -335,11 +335,20 @@ final class AppViewModel: ObservableObject {
                         try copyTextArtifacts(from: tempDir, to: contactDir)
                         summary.append("• \(contact.displayName)：\(count) 条（仅文字）")
                     case .all:
-                        // 全部导出：文字 + 原始媒体文件夹，不内嵌 HTML
+                        // 全部导出：文字 + 原始媒体文件夹，保持目录结构
                         let contactDir = base.appendingPathComponent(contact.displayName, isDirectory: true)
                         try FileManager.default.createDirectory(at: contactDir, withIntermediateDirectories: true)
                         try copyAllArtifacts(from: tempDir, to: contactDir)
                         summary.append("• \(contact.displayName)：\(count) 条（文字 + 媒体文件）")
+                    case .singleFileHTML:
+                        // 网页导出：图片/表情/语音内嵌，视频与大附件放进同名 _media 目录外链
+                        let htmlURL = try SingleFileExporter.writeHTML(
+                            from: tempDir,
+                            contactName: contact.displayName,
+                            into: base,
+                            embedMedia: true
+                        )
+                        summary.append("• \(contact.displayName)：\(count) 条 → \(htmlURL.lastPathComponent)")
                     }
                 }
 
@@ -350,18 +359,25 @@ final class AppViewModel: ObservableObject {
                     defer { try? FileManager.default.removeItem(at: stickerTemp) }
                     let stickerCount = await StickerPackExporter.exportAllPacks(in: stickerTemp, log: logHandler())
                     if stickerCount > 0 {
-                        let stickersDir = base.appendingPathComponent("全部表情包", isDirectory: true)
-                        try? FileManager.default.createDirectory(at: stickersDir, withIntermediateDirectories: true)
-                        if let files = try? FileManager.default.contentsOfDirectory(at: stickerTemp.appendingPathComponent("media/stickers"), includingPropertiesForKeys: nil) {
-                            for f in files {
-                                let dest = stickersDir.appendingPathComponent(f.lastPathComponent)
-                                if FileManager.default.fileExists(atPath: dest.path) {
-                                    try? FileManager.default.removeItem(at: dest)
-                                }
-                                try? FileManager.default.moveItem(at: f, to: dest)
+                        if mode == .singleFileHTML {
+                            // 网页导出下表情包也出一张画廊网页，与聊天记录的形态保持一致
+                            if let galleryURL = try? SingleFileExporter.writeStickerGallery(from: stickerTemp, into: base) {
+                                summary.append("• 全部表情包：\(stickerCount) 张 → \(galleryURL.lastPathComponent)")
                             }
+                        } else {
+                            let stickersDir = base.appendingPathComponent("全部表情包", isDirectory: true)
+                            try? FileManager.default.createDirectory(at: stickersDir, withIntermediateDirectories: true)
+                            if let files = try? FileManager.default.contentsOfDirectory(at: stickerTemp.appendingPathComponent("media/stickers"), includingPropertiesForKeys: nil) {
+                                for f in files {
+                                    let dest = stickersDir.appendingPathComponent(f.lastPathComponent)
+                                    if FileManager.default.fileExists(atPath: dest.path) {
+                                        try? FileManager.default.removeItem(at: dest)
+                                    }
+                                    try? FileManager.default.moveItem(at: f, to: dest)
+                                }
+                            }
+                            summary.append("• 全部表情包：\(stickerCount) 张 → 全部表情包/")
                         }
-                        summary.append("• 全部表情包：\(stickerCount) 张 → 全部表情包/")
                     }
                 }
             case .native(let paths):

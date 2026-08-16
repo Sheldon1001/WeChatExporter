@@ -412,7 +412,7 @@ private struct AboutTab: View {
                         .font(.headline)
                     GuideStep(number: 1, text: "首次使用点击「准备数据」（会重启微信）")
                     GuideStep(number: 2, text: "在左侧列表中选择一个或多个联系人")
-                    GuideStep(number: 3, text: "点击「导出选中」生成 HTML 文件")
+                    GuideStep(number: 3, text: "点击「导出选中」，按设置中选定的方式导出")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }

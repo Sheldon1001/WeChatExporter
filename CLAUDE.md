@@ -34,7 +34,9 @@ cd windows && ./build.ps1              # 产物 windows/dist/WeChatExporter/
 cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 ```
 
-仓库**没有测试代码**，CI 也不跑测试——验证靠编译通过 + 实际运行 `.app`。CI（`.github/workflows/ci.yml`）额外校验内置 wx-cli：`doctor` 输出含 `All checks passed`，且二进制 strings 里能找到 `4.1.11`。**替换 `vendor/macos/wx-cli` 时必须保持这两条成立**，否则 CI 直接失败。
+仓库**没有测试代码**，CI 也不跑测试——验证靠编译通过 + 实际运行 `.app`。CI（`.github/workflows/ci.yml`）额外校验两个内置二进制：wx-cli 的 `doctor` 输出含 `All checks passed` 且 strings 里能找到 `4.1.11`；ffmpeg 含 `libmp3lame`/`gif` 编码器、`hevc` 解码器、`palettegen` 滤镜，能端到端跑通语音通路，且无非系统动态库依赖。**替换 `vendor/macos/` 下任一二进制时必须保持这些成立**，否则 CI 直接失败。
+
+要验证纯逻辑（如 HTML 渲染、媒体归档）而不想开 GUI，可以用 `swiftc` 把相关源文件连同一个临时 `main.swift` 单独编成一个命令行程序跑——`SingleFileExporter` 的依赖闭包是 `ImageExporter`、`WXGFTranscoder`、`StickerPackExporter`、`WxCliService`、`AppPaths`、`DatImageDecoder`、`SQLiteDatabase`、`EmojiExporter` 加 `Models/`。
 
 调试提示：`swift run` 跑出来的是裸可执行文件，没有 app bundle，因此拿不到 `Bundle.main.resourceURL` 里的 wx-cli（会退回 native backend），版本号也会读成 `0.0.0`。要验证真实行为必须 `./build_app.sh` 后打开 `.app`。
 
@@ -57,6 +59,19 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 
 `WxCliService.run()` 是所有调用的唯一出口：`Process` + 双管道逐行读取，`timeout: nil` 表示不限时（解密和含媒体导出用它），stderr 逐行喂给 `onActivity` 驱动进度条，`isJSONOutputLine` 过滤掉 `sessions --format json` 的原始输出以免刷屏日志面板。
 
+### macOS 还捆绑了 ffmpeg（v2.14.0 起）
+
+`vendor/macos/ffmpeg` 是最小化 LGPL 静态构建（2.7 MB），由 `scripts/build_ffmpeg_minimal.sh` 产出，`build_app.sh` 拷进 `Contents/Resources/`。
+
+**它不是给 Swift 用的，主要是喂给 wx-cli。** `WxCliService.childEnvironment()` 在现有环境上注入 `FFMPEG_PATH` 指向包内二进制——这就是语音功能的全部接线：wx-cli 的 `export` 通路本身就会转码语音，拿到 ffmpeg 后自动把 SILK 转成 MP3 写进 `media/`，并挂进该条消息的 `media_files`（两条均已实测确认）。找不到 ffmpeg 时 wx-cli 降级导出原始 `.silk` 并打 hint，不会报错中断。
+
+改动这块时注意两条红线：
+
+- **构建脚本不可加 `--enable-gpl` / `--enable-version3`**。`libmp3lame` 是 LGPL，不需要 GPL；一旦加了，MIT 的分发前提就不成立。详见 `vendor/README.md`
+- ffmpeg 的组件清单是从 wx-cli 二进制里还原出的实际调用倒推的，`--disable-everything` 之下漏一个组件就是运行期才炸。CI 有端到端自检兜底
+
+`WXGFTranscoder.locateFFmpeg()` 也会优先用包内这份，把 WXGF 动态表情转成动图 GIF；拿不到 ffmpeg 时退回 AVFoundation 只能取单帧静图。
+
 ### macOS 的第二后端（native fallback）
 
 `AppViewModel.Backend` 是 `.wxCli` 或 `.native` 二选一，构造时若找不到任何 wx-cli 才落到 `.native`。native 路径是自研的完整实现，Windows 侧没有对应物：
@@ -70,11 +85,16 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 `AppViewModel.exportSelected()` 对每个会话：建临时目录 → `wx-cli export` 写 txt + json → 后处理 → 按 `ExportMode` 决定落盘形态 → 删临时目录。后处理链：`normalizeExportArtifacts`（把 `联系人_日期.json` 统一复制成 `chat.json`/`chat.txt`，并从 JSON 生成带 BOM 的 `chat.csv`）、含媒体时再跑 `EmojiExporter` → `ImageExporter`（内部调 `DatImageDecoder` 解 `.dat`、`WXGFTranscoder` 转 WXGF）。
 
 `ExportMode`（持久化在 UserDefaults `export.mode`）：
-- `categorized`（默认）→ `MediaOrganizer.organize` 归档到 `<联系人>/{文字,图片,视频,其他}/`
+- `categorized`（默认）→ `MediaOrganizer.organize` 归档到 `<联系人>/{文字,图片,视频,语音,其他}/`
 - `textOnly` → 只拷 txt/json/csv，且 `includesMedia == false`（wx-cli 加 `--no-media`）
 - `all` → 原样递归拷贝全部文件
+- `singleFileHTML` → `SingleFileExporter.writeHTML`，表情包同时出一张 `writeStickerGallery` 画廊
 
-**已知分叉**：v2.12.0 起 macOS 不再生成媒体内嵌 HTML，`Sources/.../SingleFileExporter.swift` 因此变成无人调用的死代码（仍在编译）；Windows 的 `SingleFileExporter.cs` 仍是主路径，`MainViewModel` 依旧输出内嵌 HTML 和表情包画廊。
+新增 case 时注意 `includesMedia` 必须返回 `true`，否则 wx-cli 被加 `--no-media`，拿不到任何媒体。
+
+`SingleFileExporter.embedMedia` **纯按文件扩展名分派**，与 msg_type 无关——语音只要是 `.mp3` 就渲染成 `<audio>`。视频与 >8 MB 的文件不做 base64，改由 `ExternalMediaSink` 拷到 HTML 同名的 `<名称>_<时间戳>_media/` 里相对路径外链（base64 会让含视频的 HTML 涨到 GB 级）。`renderOrphanMedia` 兜底渲染没被任何消息引用的媒体，但它们会堆在文档末尾而非按时间内联。
+
+**两端分叉**：Windows 的 `SingleFileExporter.cs` 一直是主路径且只出 HTML；macOS 这边 HTML 只是四选一里的一种。两边的 HTML 结构和样式并不一致，改一侧不会自动同步到另一侧。
 
 ### 进度与日志
 

@@ -1,6 +1,10 @@
 import Foundation
 
-/// 将导出目录中的聊天记录与媒体打包为单个自包含 HTML 文件（图片/表情/音视频以 base64 内嵌）。
+/// 将导出目录中的聊天记录与媒体渲染成 HTML：图片、表情、语音以 base64 内嵌，
+/// 视频与大附件拷到 HTML 同级的 `<名称>_media/` 目录后用相对路径外链。
+///
+/// 视频不内嵌是刻意的：微信视频动辄几百 MB，base64 还要再膨胀约 33%，
+/// 内嵌会生成 GB 级 HTML 把浏览器拖死。
 enum SingleFileExporter {
     struct MessageRow {
         let time: String
@@ -8,6 +12,54 @@ enum SingleFileExporter {
         let type: String
         let content: String
         let mediaPaths: [String]
+    }
+
+    /// 单个媒体文件超过此大小就不再 base64 内嵌，改走外链，避免单个大文件撑爆 HTML。
+    private static let embedSizeLimit = 8 * 1024 * 1024
+
+    /// 外链媒体的落盘目录与其在 HTML 中的相对前缀。目录按需创建——没有外链媒体时不会留下空文件夹。
+    final class ExternalMediaSink {
+        let directory: URL
+        let relativePrefix: String
+        private var created = false
+        private var assignedNames = Set<String>()
+
+        init(directory: URL, relativePrefix: String) {
+            self.directory = directory
+            self.relativePrefix = relativePrefix
+        }
+
+        /// 把文件拷进外链目录，返回可直接写进 HTML `src` 的相对路径；失败返回 nil。
+        func store(_ fileURL: URL) -> String? {
+            let fm = FileManager.default
+            if !created {
+                guard (try? fm.createDirectory(at: directory, withIntermediateDirectories: true)) != nil else {
+                    return nil
+                }
+                created = true
+            }
+
+            // media/ 下可能有同名文件位于不同子目录，这里做一次去重命名
+            var name = sanitizeFilename(fileURL.lastPathComponent)
+            if assignedNames.contains(name) {
+                let stem = (name as NSString).deletingPathExtension
+                let ext = (name as NSString).pathExtension
+                var n = 2
+                while true {
+                    let candidate = ext.isEmpty ? "\(stem)_\(n)" : "\(stem)_\(n).\(ext)"
+                    if !assignedNames.contains(candidate) { name = candidate; break }
+                    n += 1
+                }
+            }
+
+            let dest = directory.appendingPathComponent(name)
+            if fm.fileExists(atPath: dest.path) {
+                try? fm.removeItem(at: dest)
+            }
+            guard (try? fm.copyItem(at: fileURL, to: dest)) != nil else { return nil }
+            assignedNames.insert(name)
+            return "\(urlEncodePathComponent(relativePrefix))/\(urlEncodePathComponent(name))"
+        }
     }
 
     /// 从已导出的临时目录生成 HTML，写入 `destinationDir`，返回 HTML 文件 URL。
@@ -32,18 +84,32 @@ enum SingleFileExporter {
         let stamp = Self.fileStamp()
         let outURL = destinationDir.appendingPathComponent("\(safeName)_\(stamp).html")
 
+        // 与 HTML 同名配对，多个会话导到同一目录时不会互相覆盖
+        let mediaDirName = "\(safeName)_\(stamp)_media"
+        let external = embedMedia
+            ? ExternalMediaSink(
+                directory: destinationDir.appendingPathComponent(mediaDirName, isDirectory: true),
+                relativePrefix: mediaDirName
+              )
+            : nil
+
+        try FileManager.default.createDirectory(at: destinationDir, withIntermediateDirectories: true)
+
         let title = escapeHTML(contactName.isEmpty ? "微信聊天记录" : contactName)
         var body = ""
         var embedded = Set<String>()
         for row in rows {
-            body += renderMessage(row, sourceDir: sourceDir, embedded: &embedded, embedMediaFlag: embedMedia)
+            body += renderMessage(
+                row, sourceDir: sourceDir, embedded: &embedded,
+                embedMediaFlag: embedMedia, external: external
+            )
         }
         if embedMedia {
-            body += renderOrphanMedia(sourceDir: sourceDir, embedded: &embedded)
+            body += renderOrphanMedia(sourceDir: sourceDir, embedded: &embedded, external: external)
         }
 
         let mediaBadge = embedMedia
-            ? "<span class=\"pill pill-purple\">媒体已内嵌</span>"
+            ? "<span class=\"pill pill-purple\">图片 · 语音已内嵌</span>"
             : "<span class=\"pill pill-purple\">纯文字版</span>"
 
         let html = """
@@ -86,7 +152,6 @@ enum SingleFileExporter {
         </html>
         """
 
-        try FileManager.default.createDirectory(at: destinationDir, withIntermediateDirectories: true)
         try html.write(to: outURL, atomically: true, encoding: .utf8)
         return outURL
     }
@@ -157,7 +222,8 @@ enum SingleFileExporter {
     private static func renderStickerPack(_ pack: StickerPackExporter.StickerPack, sourceDir: URL) -> String {
         var tiles = ""
         for sticker in pack.stickers {
-            guard let block = embedMedia(relativePath: sticker.path, sourceDir: sourceDir) else { continue }
+            // 表情包全是小图，不需要外链目录
+            guard let block = embedMedia(relativePath: sticker.path, sourceDir: sourceDir, external: nil) else { continue }
             let caption = escapeHTML(sticker.caption)
             tiles += """
                 <figure class="sticker-tile">
@@ -465,6 +531,42 @@ enum SingleFileExporter {
       line-height: 1.65;
       color: rgba(240,248,255,0.94);
     }
+    .text a.link {
+      color: var(--cyan);
+      text-decoration: none;
+      border-bottom: 1px solid rgba(0,245,255,0.35);
+      word-break: break-all;
+      transition: color 0.2s ease, border-color 0.2s ease;
+    }
+    .text a.link:hover {
+      color: var(--magenta);
+      border-bottom-color: rgba(255,77,210,0.6);
+      text-shadow: 0 0 10px rgba(255,77,210,0.35);
+    }
+    .attach {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+      padding: 8px 14px;
+      border-radius: 10px;
+      font-size: 13px;
+      color: var(--text);
+      text-decoration: none;
+      background: rgba(12,20,48,0.6);
+      border: 1px solid rgba(123,97,255,0.35);
+      transition: border-color 0.2s ease, transform 0.2s ease;
+      word-break: break-all;
+    }
+    .attach:hover {
+      border-color: rgba(0,245,255,0.5);
+      transform: translateY(-1px);
+    }
+    .attach-size {
+      color: var(--subtext);
+      font-size: 11px;
+      font-variant-numeric: tabular-nums;
+    }
     .media { margin-top: 12px; }
     .media img, .media .chat-img {
       max-width: min(100%, 440px);
@@ -505,19 +607,28 @@ enum SingleFileExporter {
     }
     """
 
-    private static func renderMessage(_ row: MessageRow, sourceDir: URL, embedded: inout Set<String>, embedMediaFlag: Bool) -> String {
+    private static func renderMessage(
+        _ row: MessageRow,
+        sourceDir: URL,
+        embedded: inout Set<String>,
+        embedMediaFlag: Bool,
+        external: ExternalMediaSink?
+    ) -> String {
         var mediaHTML = ""
         if embedMediaFlag {
             for rel in row.mediaPaths {
                 guard embedded.insert(rel).inserted else { continue }
-                if let block = embedMedia(relativePath: rel, sourceDir: sourceDir) {
+                if let block = embedMedia(relativePath: rel, sourceDir: sourceDir, external: external) {
                     mediaHTML += block
                 }
             }
         }
 
-        let content = escapeHTML(row.content)
-        let showText = !content.isEmpty && content != "[图片]" && content != "[语音]" && content != "[视频]" && content != "[表情]"
+        let plain = cleanContent(row.content)
+        let content = escapeAndLinkify(plain)
+        // 媒体已经渲染出来时，正文再重复一个占位标签只会碍眼；
+        // 但媒体缺失时必须留着，否则整张卡片会是空的
+        let showText = !plain.isEmpty && !(redundantPlaceholders.contains(plain) && !mediaHTML.isEmpty)
 
         return """
             <article class="msg">
@@ -533,7 +644,11 @@ enum SingleFileExporter {
         """
     }
 
-    private static func renderOrphanMedia(sourceDir: URL, embedded: inout Set<String>) -> String {
+    private static func renderOrphanMedia(
+        sourceDir: URL,
+        embedded: inout Set<String>,
+        external: ExternalMediaSink?
+    ) -> String {
         let mediaRoot = sourceDir.appendingPathComponent("media", isDirectory: true)
         guard let enumerator = FileManager.default.enumerator(
             at: mediaRoot,
@@ -546,7 +661,7 @@ enum SingleFileExporter {
             guard (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
             let rel = "media/" + fileURL.path.replacingOccurrences(of: mediaRoot.path + "/", with: "")
             guard embedded.insert(rel).inserted else { continue }
-            guard let block = embedMedia(relativePath: rel, sourceDir: sourceDir) else { continue }
+            guard let block = embedMedia(relativePath: rel, sourceDir: sourceDir, external: external) else { continue }
             html += """
                 <article class="msg">
                   <div class="meta">
@@ -562,7 +677,14 @@ enum SingleFileExporter {
         return html
     }
 
-    private static func embedMedia(relativePath: String, sourceDir: URL) -> String? {
+    /// 按扩展名分派渲染。注意这里**只看文件扩展名**，与消息类型无关——
+    /// 所以语音只要被 wx-cli 转成了 .mp3 就会渲染成可播放的 `<audio>`。
+    /// - Parameter external: 视频与大附件的外链落点；为 nil 时这类文件退化成文字占位。
+    private static func embedMedia(
+        relativePath: String,
+        sourceDir: URL,
+        external: ExternalMediaSink?
+    ) -> String? {
         let rel = relativePath.hasPrefix("media/") ? relativePath : "media/\(relativePath)"
         let fileURL = sourceDir.appendingPathComponent(rel)
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
@@ -570,7 +692,7 @@ enum SingleFileExporter {
         let ext = fileURL.pathExtension.lowercased()
         if ext == "wxgf", let transcoded = WXGFTranscoder.transcodeIfNeeded(at: fileURL) {
             let decodedRel = (rel as NSString).deletingPathExtension + "." + transcoded.pathExtension
-            return embedMedia(relativePath: decodedRel, sourceDir: sourceDir)
+            return embedMedia(relativePath: decodedRel, sourceDir: sourceDir, external: external)
         }
 
         if ext == "dat" || ext == "wxgf" {
@@ -579,9 +701,24 @@ enum SingleFileExporter {
                 let decoded = base.appendingPathExtension(alt)
                 if FileManager.default.fileExists(atPath: decoded.path) {
                     let decodedRel = (rel as NSString).deletingPathExtension + ".\(alt)"
-                    return embedMedia(relativePath: decodedRel, sourceDir: sourceDir)
+                    return embedMedia(relativePath: decodedRel, sourceDir: sourceDir, external: external)
                 }
             }
+        }
+
+        // 视频一律外链：base64 会让 HTML 膨胀到浏览器打不开
+        if videoExts.contains(ext) {
+            if let href = external?.store(fileURL) {
+                return "<video controls preload=\"metadata\" src=\"\(href)\"></video>"
+            }
+            return "<p class=\"text\">[视频 \(escapeHTML(fileURL.lastPathComponent))]</p>"
+        }
+
+        let fileSize = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int) ?? 0
+
+        // 单个文件过大时同样外链，避免撑爆 HTML
+        if fileSize > embedSizeLimit, let href = external?.store(fileURL) {
+            return attachmentLink(href: href, name: fileURL.lastPathComponent, size: fileSize)
         }
 
         guard let data = try? Data(contentsOf: fileURL), !data.isEmpty else { return nil }
@@ -605,17 +742,43 @@ enum SingleFileExporter {
         case "dat":
             return "<p class=\"text\">[加密图片未能解密：\(escapeHTML(fileURL.lastPathComponent))]</p>"
         case "wxgf":
-            return "<p class=\"text\">[WXGF 图片转码失败：\(escapeHTML(fileURL.lastPathComponent))。如系统未安装 ffmpeg，macOS 会尝试原生 HEVC 解码，但部分文件仍可能失败]</p>"
-        case "mp3", "m4a", "aac":
-            let mime = ext == "mp3" ? "audio/mpeg" : "audio/mp4"
-            return "<audio controls src=\"data:\(mime);base64,\(b64)\"></audio>"
-        case "mp4", "mov":
-            return "<video controls src=\"data:video/mp4;base64,\(b64)\"></video>"
+            return "<p class=\"text\">[WXGF 动态表情转码失败：\(escapeHTML(fileURL.lastPathComponent))]</p>"
+        case "mp3":
+            return "<audio controls preload=\"none\" src=\"data:audio/mpeg;base64,\(b64)\"></audio>"
+        case "m4a", "aac":
+            return "<audio controls preload=\"none\" src=\"data:audio/mp4;base64,\(b64)\"></audio>"
+        case "wav":
+            return "<audio controls preload=\"none\" src=\"data:audio/wav;base64,\(b64)\"></audio>"
+        case "ogg", "opus":
+            return "<audio controls preload=\"none\" src=\"data:audio/ogg;base64,\(b64)\"></audio>"
         case "silk":
-            return "<p class=\"text\">[语音 SILK 格式：\(escapeHTML(fileURL.lastPathComponent))，大小 \(data.count) 字节]</p>"
+            // wx-cli 找不到 ffmpeg 时会降级导出微信原始语音格式，浏览器无法播放
+            return "<p class=\"text\">[语音 \(escapeHTML(fileURL.lastPathComponent))：微信原始 SILK 格式，浏览器无法直接播放。"
+                + "本应由应用内置的 ffmpeg 自动转成 MP3，若持续出现请检查应用包是否完整]</p>"
         default:
-            return "<p class=\"text\">[附件 \(escapeHTML(fileURL.lastPathComponent))，大小 \(data.count) 字节]</p>"
+            if let href = external?.store(fileURL) {
+                return attachmentLink(href: href, name: fileURL.lastPathComponent, size: fileSize)
+            }
+            return "<p class=\"text\">[附件 \(escapeHTML(fileURL.lastPathComponent))，大小 \(formatBytes(fileSize))]</p>"
         }
+    }
+
+    private static let videoExts: Set<String> = ["mp4", "mov", "m4v", "avi", "mkv", "webm", "3gp"]
+
+    private static func attachmentLink(href: String, name: String, size: Int) -> String {
+        "<a class=\"attach\" href=\"\(href)\" target=\"_blank\" rel=\"noopener noreferrer\">"
+            + "📎 \(escapeHTML(name))<span class=\"attach-size\">\(formatBytes(size))</span></a>"
+    }
+
+    private static func formatBytes(_ bytes: Int) -> String {
+        let units = ["B", "KB", "MB", "GB"]
+        var value = Double(bytes)
+        var idx = 0
+        while value >= 1024, idx < units.count - 1 {
+            value /= 1024
+            idx += 1
+        }
+        return idx == 0 ? "\(bytes) B" : String(format: "%.1f %@", value, units[idx])
     }
 
     // MARK: - JSON parsing
@@ -731,5 +894,93 @@ enum SingleFileExporter {
             .replacingOccurrences(of: "<", with: "&lt;")
             .replacingOccurrences(of: ">", with: "&gt;")
             .replacingOccurrences(of: "\"", with: "&quot;")
+    }
+
+    private static let redundantPlaceholders: Set<String> = [
+        "[图片]", "[语音]", "[视频]", "[表情]", "[动画表情]", "[文件]",
+    ]
+
+    /// wx-cli 的 snippet 有两个毛病，直接渲染会让页面很难看：
+    /// 一是表情类消息会把整段原始 XML 带出来（`[emoji <msg><emoji …`），
+    /// 二是部分占位标签是英文的（`[voice]` / `[image]`）。这里一并收拾干净。
+    ///
+    /// 注意 `[旺柴]`、`[微笑]` 这类是微信内联表情的正常文本，必须原样保留。
+    private static func cleanContent(_ s: String) -> String {
+        var text = s
+        if let xmlStart = text.range(of: "<msg") ?? text.range(of: "<?xml") {
+            text = String(text[text.startIndex..<xmlStart.lowerBound])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            // 截断后括号可能不配对，如 `[emoji`
+            if text.hasPrefix("["), !text.hasSuffix("]") { text += "]" }
+        }
+
+        switch text {
+        case "[emoji]": return "[动画表情]"
+        case "[voice]": return "[语音]"
+        case "[image]": return "[图片]"
+        case "[video]": return "[视频]"
+        case "[file]": return "[文件]"
+        case "[system]": return "[系统消息]"
+        default: return text
+        }
+    }
+
+    /// 用 RFC 3986 的字符允许表而不是排除表：中文聊天里 URL 后面常常紧跟汉字没有空格，
+    /// 用排除表很容易把「…/b)结束」整段吞进链接。允许表天然把汉字和全角标点挡在外面。
+    private static let urlRegex = try? NSRegularExpression(
+        pattern: "https?://[A-Za-z0-9\\-._~:/?#\\[\\]@!$&'()*+,;=%]+",
+        options: []
+    )
+
+    /// 转义正文，并把其中的 http(s) 链接变成可点击的 `<a>`。
+    ///
+    /// 先切分再分段转义，而不是先转义再匹配——后者会让 URL 里的 `&` 变成 `&amp;` 干扰匹配边界。
+    private static func escapeAndLinkify(_ s: String) -> String {
+        guard let regex = urlRegex, !s.isEmpty else { return escapeHTML(s) }
+        let ns = s as NSString
+        let matches = regex.matches(in: s, range: NSRange(location: 0, length: ns.length))
+        guard !matches.isEmpty else { return escapeHTML(s) }
+
+        var result = ""
+        var cursor = 0
+        for match in matches {
+            var range = match.range
+            // 句末标点常被贪婪吞进 URL，这里退回去
+            while range.length > 0 {
+                let lastChar = ns.substring(with: NSRange(location: range.location + range.length - 1, length: 1))
+                if ".,;:!?'\"".contains(lastChar) {
+                    range.length -= 1
+                    continue
+                }
+                // 右括号只有在配不上左括号时才算多出来的（形如「(详见 https://…)」）；
+                // 维基百科那种 URL 自带括号的情况要保留
+                if [")", "]", "}"].contains(lastChar) {
+                    let candidate = ns.substring(with: range)
+                    let opens = candidate.filter { "([{".contains($0) }.count
+                    let closes = candidate.filter { ")]}".contains($0) }.count
+                    if closes > opens {
+                        range.length -= 1
+                        continue
+                    }
+                }
+                break
+            }
+            guard range.length > 0, range.location >= cursor else { continue }
+
+            result += escapeHTML(ns.substring(with: NSRange(location: cursor, length: range.location - cursor)))
+            let link = escapeHTML(ns.substring(with: range))
+            result += "<a class=\"link\" href=\"\(link)\" target=\"_blank\" rel=\"noopener noreferrer\">\(link)</a>"
+            cursor = range.location + range.length
+        }
+        result += escapeHTML(ns.substring(from: cursor))
+        return result
+    }
+
+    /// 把文件名编成可安全放进 HTML `src`/`href` 的形式（空格、中文、`#`、`?` 等都要处理）。
+    private static func urlEncodePathComponent(_ s: String) -> String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        let encoded = s.addingPercentEncoding(withAllowedCharacters: allowed) ?? s
+        return escapeHTML(encoded)
     }
 }

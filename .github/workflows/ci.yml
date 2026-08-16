@@ -29,6 +29,27 @@ jobs:
           # Allowlist embeds as concatenated literals: ...4.1.104.1.11...
           strings WeChatExporter.app/Contents/Resources/wx-cli | grep -F '4.1.11' >/dev/null
 
+      - name: Verify bundled ffmpeg covers the voice and WXGF pipelines
+        run: |
+          FFMPEG=WeChatExporter.app/Contents/Resources/ffmpeg
+          test -x "$FFMPEG"
+          test -f WeChatExporter.app/Contents/Resources/ffmpeg-COPYING.LGPLv2.1
+          # 语音：SILK 解出的 PCM 转 MP3；WXGF：HEVC 解码 + 动图 GIF
+          "$FFMPEG" -hide_banner -encoders | grep -q libmp3lame
+          "$FFMPEG" -hide_banner -encoders | grep -qw gif
+          "$FFMPEG" -hide_banner -decoders | grep -qw hevc
+          "$FFMPEG" -hide_banner -filters | grep -qw palettegen
+          # 端到端跑一遍语音通路，光有组件不代表接得上
+          head -c 48000 /dev/zero | "$FFMPEG" -hide_banner -loglevel error \
+            -f s16le -ar 24000 -ac 1 -i pipe:0 -b:a 64k -f mp3 pipe:1 > /tmp/selftest.mp3
+          test -s /tmp/selftest.mp3
+          # 静态构建：除系统库外不应有任何动态依赖，否则换机即挂
+          if otool -L "$FFMPEG" | tail -n +2 | awk '{print $1}' \
+               | grep -v '^/usr/lib/' | grep -v '^/System/Library/' | grep .; then
+            echo "ffmpeg 存在非系统动态库依赖，静态构建未生效" >&2
+            exit 1
+          fi
+
   build-windows:
     name: Build Windows
     runs-on: windows-latest
