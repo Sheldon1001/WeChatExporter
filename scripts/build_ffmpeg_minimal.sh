@@ -17,6 +17,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUTPUT="${OUTPUT:-$ROOT/vendor/macos/ffmpeg}"
+# ffprobe 与 ffmpeg 一起产出：wx-cli 用它数 WXGF 的帧数，据此决定输出静态 PNG 还是动图 GIF，
+# 缺了它动态表情就出不来。放在 ffmpeg 同目录下。
+OUTPUT_PROBE="${OUTPUT_PROBE:-$(dirname "$OUTPUT")/ffprobe}"
 WORK="${WORK:-$ROOT/.build/ffmpeg-minimal}"
 
 # 版本锁定：升级时同步更新 vendor/README.md
@@ -86,7 +89,7 @@ export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig"
   --disable-autodetect \
   --disable-shared --enable-static \
   --pkg-config-flags=--static \
-  --disable-programs --enable-ffmpeg \
+  --disable-programs --enable-ffmpeg --enable-ffprobe \
   --disable-doc --disable-debug --disable-network --disable-iconv \
   --enable-small \
   --enable-demuxer=pcm_s16le,hevc,image2,image2pipe,mp3,mov,matroska \
@@ -106,7 +109,9 @@ make -j"$(sysctl -n hw.ncpu)"
 popd >/dev/null
 
 BUILT="$WORK/ffmpeg-${FFMPEG_VERSION}/ffmpeg"
+BUILT_PROBE="$WORK/ffmpeg-${FFMPEG_VERSION}/ffprobe"
 [[ -x "$BUILT" ]] || { echo "错误：未生成 ffmpeg 可执行文件" >&2; exit 1; }
+[[ -x "$BUILT_PROBE" ]] || { echo "错误：未生成 ffprobe 可执行文件" >&2; exit 1; }
 
 # ------------------------------------------------------------------ 自检
 echo "==> 自检"
@@ -127,25 +132,36 @@ head -c 48000 /dev/zero | "$BUILT" -hide_banner -loglevel error \
 [[ -s "$WORK/selftest.mp3" ]] || { echo "错误：语音通路自检失败" >&2; exit 1; }
 echo "语音通路自检通过（$(wc -c < "$WORK/selftest.mp3") 字节 MP3）"
 
+# ffprobe 要能数出帧数，wx-cli 靠它区分动图与静图
+"$BUILT_PROBE" -hide_banner -v error -count_frames -select_streams v:0 \
+  -show_entries stream=nb_read_frames -of default=nw=1:nk=1 "$WORK/selftest.mp3" >/dev/null 2>&1 || true
+"$BUILT_PROBE" -hide_banner -version >/dev/null 2>&1 \
+  || { echo "错误：ffprobe 无法运行" >&2; exit 1; }
+echo "ffprobe 自检通过"
+
 # 确认没有非系统动态库依赖，否则换机即挂
-NONSYS="$(otool -L "$BUILT" | tail -n +2 | awk '{print $1}' \
-  | grep -v '^/usr/lib/' | grep -v '^/System/Library/' || true)"
-if [[ -n "$NONSYS" ]]; then
-  echo "错误：存在非系统动态库依赖，静态构建未生效：" >&2
-  echo "$NONSYS" >&2
-  exit 1
-fi
+for bin in "$BUILT" "$BUILT_PROBE"; do
+  NONSYS="$(otool -L "$bin" | tail -n +2 | awk '{print $1}' \
+    | grep -v '^/usr/lib/' | grep -v '^/System/Library/' || true)"
+  if [[ -n "$NONSYS" ]]; then
+    echo "错误：$(basename "$bin") 存在非系统动态库依赖，静态构建未生效：" >&2
+    echo "$NONSYS" >&2
+    exit 1
+  fi
+done
 echo "动态库依赖检查通过（仅系统库）"
 
 # ------------------------------------------------------------------ 安装
 mkdir -p "$(dirname "$OUTPUT")"
 cp "$BUILT" "$OUTPUT"
-strip -S -x "$OUTPUT" 2>/dev/null || true
-chmod +x "$OUTPUT"
+cp "$BUILT_PROBE" "$OUTPUT_PROBE"
+strip -S -x "$OUTPUT" "$OUTPUT_PROBE" 2>/dev/null || true
+chmod +x "$OUTPUT" "$OUTPUT_PROBE"
 
 # LGPL 要求随分发提供许可证全文
 cp "$WORK/ffmpeg-${FFMPEG_VERSION}/COPYING.LGPLv2.1" "$(dirname "$OUTPUT")/ffmpeg-COPYING.LGPLv2.1"
 
 echo ""
 echo "完成：${OUTPUT} （$(du -h "$OUTPUT" | cut -f1)）"
+echo "      ${OUTPUT_PROBE} （$(du -h "$OUTPUT_PROBE" | cut -f1)）"
 echo "许可证：$(dirname "$OUTPUT")/ffmpeg-COPYING.LGPLv2.1"

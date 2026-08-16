@@ -9,7 +9,7 @@ ICON_SRC="$ROOT/assets/AppIcon.icns"
 ICON_PNG="$ROOT/assets/AppIcon.png"
 WX_CLI_VERSION="${WX_CLI_VERSION:-vendor}"
 APP_VERSION="${APP_VERSION:-2.14.0}"
-APP_BUILD="${APP_BUILD:-27}"
+APP_BUILD="${APP_BUILD:-28}"
 
 echo "编译原生 macOS 应用…"
 cd "$ROOT"
@@ -23,8 +23,9 @@ echo "打包内置 wx-cli…"
 bash "$ROOT/scripts/bundle_wx_cli.sh" "$APP_DIR/Contents/Resources"
 chmod +x "$APP_DIR/Contents/Resources/wx-cli"
 
-# ffmpeg 供 wx-cli 把微信语音（SILK）转成 MP3，并解码 WXGF 动态表情。
-# 缺失时 wx-cli 会自动降级导出原始 .silk，不会中断导出。
+# ffmpeg 供 wx-cli 把微信语音（SILK）转成 MP3，并解码 WXGF 动态表情；
+# ffprobe 用来数 WXGF 帧数，缺了它动态表情出不来。
+# 两者都缺失时 wx-cli 会自动降级导出原始 .silk / .wxgf，不会中断导出。
 if [[ -f "$ROOT/vendor/macos/ffmpeg" ]]; then
   echo "打包内置 ffmpeg…"
   cp "$ROOT/vendor/macos/ffmpeg" "$APP_DIR/Contents/Resources/ffmpeg"
@@ -34,6 +35,14 @@ if [[ -f "$ROOT/vendor/macos/ffmpeg" ]]; then
 else
   echo "警告：未找到 vendor/macos/ffmpeg，语音将以原始 SILK 格式导出"
   echo "      执行 bash scripts/build_ffmpeg_minimal.sh 可构建它"
+fi
+
+if [[ -f "$ROOT/vendor/macos/ffprobe" ]]; then
+  echo "打包内置 ffprobe…"
+  cp "$ROOT/vendor/macos/ffprobe" "$APP_DIR/Contents/Resources/ffprobe"
+  chmod +x "$APP_DIR/Contents/Resources/ffprobe"
+else
+  echo "警告：未找到 vendor/macos/ffprobe，WXGF 动态表情将无法输出动图"
 fi
 
 bash "$ROOT/scripts/prepare_icon.sh"

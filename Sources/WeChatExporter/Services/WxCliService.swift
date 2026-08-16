@@ -32,9 +32,19 @@ final class WxCliService {
     /// 应用包内随附的 ffmpeg。wx-cli 用它把微信语音（SILK）转成 MP3，
     /// 以及解码 WXGF 动态表情；找不到时 wx-cli 会自动降级导出原始 .silk。
     static func bundledFFmpeg() -> URL? {
+        bundledTool("ffmpeg")
+    }
+
+    /// 应用包内随附的 ffprobe。wx-cli 用它数 WXGF 的帧数，据此决定输出静态 PNG 还是动图 GIF——
+    /// 只给 ffmpeg 不给 ffprobe 的话，动态表情会出不来。
+    static func bundledFFprobe() -> URL? {
+        bundledTool("ffprobe")
+    }
+
+    private static func bundledTool(_ name: String) -> URL? {
         let candidates = [
-            Bundle.main.resourceURL?.appendingPathComponent("ffmpeg"),
-            Bundle.main.bundleURL.appendingPathComponent("MacOS/ffmpeg"),
+            Bundle.main.resourceURL?.appendingPathComponent(name),
+            Bundle.main.bundleURL.appendingPathComponent("MacOS/\(name)"),
         ]
         for url in candidates.compactMap({ $0 }) where FileManager.default.isExecutableFile(atPath: url.path) {
             return url
@@ -42,12 +52,15 @@ final class WxCliService {
         return nil
     }
 
-    /// 传给 wx-cli 的环境变量：在当前环境基础上补上 `FFMPEG_PATH`。
-    /// 用户已自行设置该变量时不覆盖；包内没有 ffmpeg 时保持原样（由 wx-cli 自行在 PATH 上找）。
+    /// 传给 wx-cli 的环境变量：在当前环境基础上补上 `FFMPEG_PATH` 与 `FFPROBE_PATH`。
+    /// 用户已自行设置这些变量时不覆盖；包内没有对应二进制时保持原样（由 wx-cli 自行在 PATH 上找）。
     private static func childEnvironment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         if env["FFMPEG_PATH"] == nil, let ffmpeg = bundledFFmpeg() {
             env["FFMPEG_PATH"] = ffmpeg.path
+        }
+        if env["FFPROBE_PATH"] == nil, let ffprobe = bundledFFprobe() {
+            env["FFPROBE_PATH"] = ffprobe.path
         }
         return env
     }

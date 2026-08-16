@@ -20,6 +20,7 @@ enum ImageExporter {
         try? FileManager.default.createDirectory(at: imageDir, withIntermediateDirectories: true)
 
         var processed = 0
+        var failed = 0
         var seenNames = Set<String>()
 
         for index in items.indices {
@@ -41,11 +42,15 @@ enum ImageExporter {
                 if await downloadImage(attrs: attrs, to: dest) {
                     appendMediaFile(to: &items[index], path: mediaPath)
                     processed += 1
-                    log("已下载图片：\(filename)")
                 } else {
-                    log("图片下载失败：\(filename)")
+                    // 逐张打日志会把日志面板刷爆，这里只累计，最后汇总一行
+                    failed += 1
                 }
             }
+        }
+
+        if failed > 0 {
+            log("图片未能取回 \(failed) 张。多为原图已过期或只在手机上保留，在微信里打开对应聊天可重新下载后再导出。")
         }
 
         let decoded = await DatImageDecoder.decodeDatFiles(in: outputDir, log: log)

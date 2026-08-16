@@ -62,29 +62,40 @@ enum SingleFileExporter {
         }
     }
 
-    /// 从已导出的临时目录生成 HTML，写入 `destinationDir`，返回 HTML 文件 URL。
+    /// 单个 HTML 最多容纳的消息条数。超出后自动分卷，否则几万条消息的会话会生成
+    /// 几百 MB 的 HTML，浏览器打开就卡死。
+    static let defaultMessagesPerPage = 1000
+
+    /// 从已导出的临时目录生成 HTML，写入 `destinationDir`，返回全部页面的 URL（按顺序，首页在前）。
+    ///
+    /// 消息数超过 `messagesPerPage` 时自动分卷，各卷共用同一个外链媒体目录，页眉带上下页导航。
     /// - Parameter embedMedia: 为 true 时将媒体以 base64 内嵌到 HTML；为 false 时仅生成纯文字版本。
+    @discardableResult
     static func writeHTML(
         from sourceDir: URL,
         contactName: String,
         into destinationDir: URL,
-        embedMedia: Bool = false
-    ) throws -> URL {
+        embedMedia: Bool = false,
+        messagesPerPage: Int = defaultMessagesPerPage
+    ) throws -> [URL] {
         let jsonURL = sourceDir.appendingPathComponent("chat.json")
         guard FileManager.default.fileExists(atPath: jsonURL.path) else {
-            throw AppError.exportFailed("未找到 chat.json，无法生成单文件导出")
+            throw AppError.exportFailed("未找到 chat.json，无法生成网页导出")
         }
 
         let rows = try parseMessages(from: jsonURL)
         guard !rows.isEmpty else {
-            throw AppError.exportFailed("聊天记录为空，无法生成单文件导出")
+            throw AppError.exportFailed("聊天记录为空，无法生成网页导出")
         }
 
         let safeName = sanitizeFilename(contactName.isEmpty ? "聊天记录" : contactName)
         let stamp = Self.fileStamp()
-        let outURL = destinationDir.appendingPathComponent("\(safeName)_\(stamp).html")
+        let perPage = max(1, messagesPerPage)
+        let chunks = stride(from: 0, to: rows.count, by: perPage).map {
+            Array(rows[$0..<min($0 + perPage, rows.count)])
+        }
 
-        // 与 HTML 同名配对，多个会话导到同一目录时不会互相覆盖
+        // 各卷共用一个媒体目录，避免同一个视频被拷贝多份
         let mediaDirName = "\(safeName)_\(stamp)_media"
         let external = embedMedia
             ? ExternalMediaSink(
@@ -95,65 +106,121 @@ enum SingleFileExporter {
 
         try FileManager.default.createDirectory(at: destinationDir, withIntermediateDirectories: true)
 
+        let fileNames = (0..<chunks.count).map { pageFileName(safeName: safeName, stamp: stamp, index: $0, total: chunks.count) }
         let title = escapeHTML(contactName.isEmpty ? "微信聊天记录" : contactName)
-        var body = ""
-        var embedded = Set<String>()
-        for row in rows {
-            body += renderMessage(
-                row, sourceDir: sourceDir, embedded: &embedded,
-                embedMediaFlag: embedMedia, external: external
-            )
-        }
-        if embedMedia {
-            body += renderOrphanMedia(sourceDir: sourceDir, embedded: &embedded, external: external)
-        }
-
         let mediaBadge = embedMedia
             ? "<span class=\"pill pill-purple\">图片 · 语音已内嵌</span>"
             : "<span class=\"pill pill-purple\">纯文字版</span>"
 
-        let html = """
-        <!DOCTYPE html>
-        <html lang="zh-CN">
-        <head>
-          <meta charset="utf-8"/>
-          <meta name="viewport" content="width=device-width, initial-scale=1"/>
-          <title>\(title)</title>
-          <style>
-            \(exportStyles)
-          </style>
-        </head>
-        <body>
-          <div class="bg-scene" aria-hidden="true">
-            <div class="aurora aurora-a"></div>
-            <div class="aurora aurora-b"></div>
-            <div class="aurora aurora-c"></div>
-            <div class="grid-floor"></div>
-          </div>
-          <header>
-            <div class="header-glow"></div>
-            <p class="eyebrow">WeChatExporter · 单文件导出</p>
-            <h1>\(title)</h1>
-            <div class="stats">
-              <span class="pill pill-cyan">\(rows.count) 条消息</span>
-              \(mediaBadge)
-              <span class="pill pill-muted">\(stamp)</span>
-            </div>
-          </header>
-          <main>
-        \(body)
-          </main>
-          <footer>
-            <span class="footer-brand">WeChatExporter</span>
-            <span class="footer-dot">·</span>
-            <span>深空霓虹主题 · 浏览器离线可阅</span>
-          </footer>
-        </body>
-        </html>
-        """
+        // 判断哪些媒体没有被任何消息引用，需要全量扫过一遍再算
+        var referencedAnywhere = Set<String>()
+        for row in rows {
+            for rel in row.mediaPaths {
+                referencedAnywhere.insert(rel.hasPrefix("media/") ? rel : "media/\(rel)")
+            }
+        }
 
-        try html.write(to: outURL, atomically: true, encoding: .utf8)
-        return outURL
+        var written: [URL] = []
+        for (pageIndex, chunk) in chunks.enumerated() {
+            // 每卷各自去重：同一张图被两卷的消息引用时，两卷都该显示出来
+            var embedded = Set<String>()
+            var body = ""
+            for row in chunk {
+                body += renderMessage(
+                    row, sourceDir: sourceDir, embedded: &embedded,
+                    embedMediaFlag: embedMedia, external: external
+                )
+            }
+            // 没被任何消息引用的媒体统一挂在最后一卷末尾
+            if embedMedia, pageIndex == chunks.count - 1 {
+                var orphanSeen = referencedAnywhere
+                body += renderOrphanMedia(sourceDir: sourceDir, embedded: &orphanSeen, external: external)
+            }
+
+            let firstIndex = pageIndex * perPage + 1
+            let lastIndex = firstIndex + chunk.count - 1
+            let nav = chunks.count > 1
+                ? renderPageNav(fileNames: fileNames, current: pageIndex)
+                : ""
+            let rangeBadge = chunks.count > 1
+                ? "<span class=\"pill pill-cyan\">第 \(pageIndex + 1) / \(chunks.count) 页 · 第 \(firstIndex)–\(lastIndex) 条</span>"
+                : "<span class=\"pill pill-cyan\">\(rows.count) 条消息</span>"
+
+            let html = """
+            <!DOCTYPE html>
+            <html lang="zh-CN">
+            <head>
+              <meta charset="utf-8"/>
+              <meta name="viewport" content="width=device-width, initial-scale=1"/>
+              <title>\(title)\(chunks.count > 1 ? "（\(pageIndex + 1)/\(chunks.count)）" : "")</title>
+              <style>
+                \(exportStyles)
+              </style>
+            </head>
+            <body>
+              <div class="bg-scene" aria-hidden="true">
+                <div class="aurora aurora-a"></div>
+                <div class="aurora aurora-b"></div>
+                <div class="aurora aurora-c"></div>
+                <div class="grid-floor"></div>
+              </div>
+              <header>
+                <div class="header-glow"></div>
+                <p class="eyebrow">WeChatExporter · 网页导出</p>
+                <h1>\(title)</h1>
+                <div class="stats">
+                  \(rangeBadge)
+                  \(chunks.count > 1 ? "<span class=\"pill pill-muted\">共 \(rows.count) 条</span>" : "")
+                  \(mediaBadge)
+                  <span class="pill pill-muted">\(stamp)</span>
+                </div>
+            \(nav)
+              </header>
+              <main>
+            \(body)
+              </main>
+            \(nav.isEmpty ? "" : "  <div class=\"nav-bottom\">\n\(nav)\n  </div>")
+              <footer>
+                <span class="footer-brand">WeChatExporter</span>
+                <span class="footer-dot">·</span>
+                <span>深空霓虹主题 · 浏览器离线可阅</span>
+              </footer>
+            </body>
+            </html>
+            """
+
+            let outURL = destinationDir.appendingPathComponent(fileNames[pageIndex])
+            try html.write(to: outURL, atomically: true, encoding: .utf8)
+            written.append(outURL)
+        }
+
+        return written
+    }
+
+    /// 单卷时保持原来的文件名不变；多卷时统一补零编号，保证文件管理器里按名称排序即是阅读顺序。
+    private static func pageFileName(safeName: String, stamp: String, index: Int, total: Int) -> String {
+        guard total > 1 else { return "\(safeName)_\(stamp).html" }
+        let width = String(total).count
+        let number = String(format: "%0\(width)d", index + 1)
+        return "\(safeName)_\(stamp)_\(number).html"
+    }
+
+    private static func renderPageNav(fileNames: [String], current: Int) -> String {
+        var links = ""
+        if current > 0 {
+            links += "<a class=\"page-link\" href=\"\(urlEncodePathComponent(fileNames[current - 1]))\">← 上一页</a>"
+        }
+        for (i, name) in fileNames.enumerated() {
+            if i == current {
+                links += "<span class=\"page-link page-current\">\(i + 1)</span>"
+            } else {
+                links += "<a class=\"page-link\" href=\"\(urlEncodePathComponent(name))\">\(i + 1)</a>"
+            }
+        }
+        if current < fileNames.count - 1 {
+            links += "<a class=\"page-link\" href=\"\(urlEncodePathComponent(fileNames[current + 1]))\">下一页 →</a>"
+        }
+        return "    <nav class=\"pager\">\(links)</nav>"
     }
 
     /// 从 `stickers-manifest.json` 生成全部表情包画廊 HTML。
@@ -531,6 +598,47 @@ enum SingleFileExporter {
       line-height: 1.65;
       color: rgba(240,248,255,0.94);
     }
+    .pager {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 14px;
+      align-items: center;
+    }
+    .page-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 32px;
+      padding: 5px 10px;
+      border-radius: 8px;
+      font-size: 12px;
+      text-decoration: none;
+      color: var(--subtext);
+      background: rgba(12,20,48,0.55);
+      border: 1px solid rgba(123,97,255,0.28);
+      transition: color 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+      font-variant-numeric: tabular-nums;
+    }
+    .page-link:hover {
+      color: var(--cyan);
+      border-color: rgba(0,245,255,0.45);
+      transform: translateY(-1px);
+    }
+    .page-current {
+      color: #06121f;
+      background: linear-gradient(92deg, var(--cyan), var(--purple));
+      border-color: transparent;
+      font-weight: 600;
+    }
+    .nav-bottom {
+      position: relative;
+      z-index: 1;
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 0 16px 32px;
+    }
+    .nav-bottom .pager { justify-content: center; margin-top: 0; }
     .text a.link {
       color: var(--cyan);
       text-decoration: none;
@@ -852,7 +960,7 @@ enum SingleFileExporter {
             if let nested = row[key] as? [String: Any] {
                 if let text = nested["Text"] as? String { return text }
                 if let text = nested["text"] as? String { return text }
-                if let emoji = nested["Emoji"] as? String { return "[表情]" }
+                if nested["Emoji"] is String { return "[动画表情]" }
             }
         }
         return nil

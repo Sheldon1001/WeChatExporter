@@ -32,7 +32,10 @@ jobs:
       - name: Verify bundled ffmpeg covers the voice and WXGF pipelines
         run: |
           FFMPEG=WeChatExporter.app/Contents/Resources/ffmpeg
+          FFPROBE=WeChatExporter.app/Contents/Resources/ffprobe
           test -x "$FFMPEG"
+          # ffprobe 用来数 WXGF 帧数，缺了它动态表情出不来
+          test -x "$FFPROBE"
           test -f WeChatExporter.app/Contents/Resources/ffmpeg-COPYING.LGPLv2.1
           # 语音：SILK 解出的 PCM 转 MP3；WXGF：HEVC 解码 + 动图 GIF
           "$FFMPEG" -hide_banner -encoders | grep -q libmp3lame
@@ -43,12 +46,16 @@ jobs:
           head -c 48000 /dev/zero | "$FFMPEG" -hide_banner -loglevel error \
             -f s16le -ar 24000 -ac 1 -i pipe:0 -b:a 64k -f mp3 pipe:1 > /tmp/selftest.mp3
           test -s /tmp/selftest.mp3
+          # WXGF 动图通路：ffprobe 必须能对裸 HEVC 流数出帧数
+          "$FFPROBE" -hide_banner -version >/dev/null
           # 静态构建：除系统库外不应有任何动态依赖，否则换机即挂
-          if otool -L "$FFMPEG" | tail -n +2 | awk '{print $1}' \
-               | grep -v '^/usr/lib/' | grep -v '^/System/Library/' | grep .; then
-            echo "ffmpeg 存在非系统动态库依赖，静态构建未生效" >&2
-            exit 1
-          fi
+          for bin in "$FFMPEG" "$FFPROBE"; do
+            if otool -L "$bin" | tail -n +2 | awk '{print $1}' \
+                 | grep -v '^/usr/lib/' | grep -v '^/System/Library/' | grep .; then
+              echo "$bin 存在非系统动态库依赖，静态构建未生效" >&2
+              exit 1
+            fi
+          done
 
   build-windows:
     name: Build Windows

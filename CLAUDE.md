@@ -61,14 +61,15 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 
 ### macOS 还捆绑了 ffmpeg（v2.14.0 起）
 
-`vendor/macos/ffmpeg` 是最小化 LGPL 静态构建（2.7 MB），由 `scripts/build_ffmpeg_minimal.sh` 产出，`build_app.sh` 拷进 `Contents/Resources/`。
+`vendor/macos/ffmpeg`（2.7 MB）与 `vendor/macos/ffprobe`（2.5 MB）是最小化 LGPL 静态构建，由 `scripts/build_ffmpeg_minimal.sh` 一并产出，`build_app.sh` 拷进 `Contents/Resources/`。
 
-**它不是给 Swift 用的，主要是喂给 wx-cli。** `WxCliService.childEnvironment()` 在现有环境上注入 `FFMPEG_PATH` 指向包内二进制——这就是语音功能的全部接线：wx-cli 的 `export` 通路本身就会转码语音，拿到 ffmpeg 后自动把 SILK 转成 MP3 写进 `media/`，并挂进该条消息的 `media_files`（两条均已实测确认）。找不到 ffmpeg 时 wx-cli 降级导出原始 `.silk` 并打 hint，不会报错中断。
+**它们不是给 Swift 用的，主要是喂给 wx-cli。** `WxCliService.childEnvironment()` 在现有环境上注入 `FFMPEG_PATH` 与 `FFPROBE_PATH` 指向包内二进制——这就是语音功能的全部接线：wx-cli 的 `export` 通路本身就会转码语音，拿到 ffmpeg 后自动把 SILK 转成 MP3 写进 `media/`，并挂进该条消息的 `media_files`（两条均已实测确认）。找不到时 wx-cli 降级导出原始 `.silk` 并打 hint，不会报错中断。
 
-改动这块时注意两条红线：
+改动这块时注意三条红线：
 
+- **两个二进制缺一不可。** wx-cli 用 ffprobe 的 `-count_frames` 数 WXGF 里 HEVC 流的帧数，据此决定输出静态 PNG 还是动图 GIF。只给 ffmpeg 不给 ffprobe，动态表情会始终出不来——这个坑踩过一次
 - **构建脚本不可加 `--enable-gpl` / `--enable-version3`**。`libmp3lame` 是 LGPL，不需要 GPL；一旦加了，MIT 的分发前提就不成立。详见 `vendor/README.md`
-- ffmpeg 的组件清单是从 wx-cli 二进制里还原出的实际调用倒推的，`--disable-everything` 之下漏一个组件就是运行期才炸。CI 有端到端自检兜底
+- 组件清单是从 wx-cli 二进制里还原出的实际调用倒推的，`--disable-everything` 之下漏一个组件就是运行期才炸（比如 PCM demuxer 的组件名是 `pcm_s16le` 而非格式名 `s16le`）。CI 有端到端自检兜底
 
 `WXGFTranscoder.locateFFmpeg()` 也会优先用包内这份，把 WXGF 动态表情转成动图 GIF；拿不到 ffmpeg 时退回 AVFoundation 只能取单帧静图。
 
@@ -92,7 +93,9 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 
 新增 case 时注意 `includesMedia` 必须返回 `true`，否则 wx-cli 被加 `--no-media`，拿不到任何媒体。
 
-`SingleFileExporter.embedMedia` **纯按文件扩展名分派**，与 msg_type 无关——语音只要是 `.mp3` 就渲染成 `<audio>`。视频与 >8 MB 的文件不做 base64，改由 `ExternalMediaSink` 拷到 HTML 同名的 `<名称>_<时间戳>_media/` 里相对路径外链（base64 会让含视频的 HTML 涨到 GB 级）。`renderOrphanMedia` 兜底渲染没被任何消息引用的媒体，但它们会堆在文档末尾而非按时间内联。
+`SingleFileExporter.embedMedia` **纯按文件扩展名分派**，与 msg_type 无关——语音只要是 `.mp3` 就渲染成 `<audio>`。视频与 >8 MB 的文件不做 base64，改由 `ExternalMediaSink` 拷到 HTML 同名的 `<名称>_<时间戳>_media/` 里相对路径外链（base64 会让含视频的 HTML 涨到 GB 级）。`renderOrphanMedia` 兜底渲染没被任何消息引用的媒体，但它们会堆在最后一卷末尾而非按时间内联。
+
+`writeHTML` 超过 `defaultMessagesPerPage`（1000 条）会自动分卷，返回 `[URL]` 而非单个 URL。分卷时各卷**共用同一个媒体目录**（避免视频被拷多份），但**每卷各自做媒体去重**——同一张图被两卷的消息引用时两卷都要显示，否则读者在第 3 卷会看到无图的消息。单卷时文件名保持不带编号，与旧行为一致。
 
 **两端分叉**：Windows 的 `SingleFileExporter.cs` 一直是主路径且只出 HTML；macOS 这边 HTML 只是四选一里的一种。两边的 HTML 结构和样式并不一致，改一侧不会自动同步到另一侧。
 

@@ -341,14 +341,19 @@ final class AppViewModel: ObservableObject {
                         try copyAllArtifacts(from: tempDir, to: contactDir)
                         summary.append("• \(contact.displayName)：\(count) 条（文字 + 媒体文件）")
                     case .singleFileHTML:
-                        // 网页导出：图片/表情/语音内嵌，视频与大附件放进同名 _media 目录外链
-                        let htmlURL = try SingleFileExporter.writeHTML(
+                        // 网页导出：图片/表情/语音内嵌，视频与大附件放进同名 _media 目录外链；
+                        // 超过 1000 条自动分卷，返回的是全部页面
+                        let pages = try SingleFileExporter.writeHTML(
                             from: tempDir,
                             contactName: contact.displayName,
                             into: base,
                             embedMedia: true
                         )
-                        summary.append("• \(contact.displayName)：\(count) 条 → \(htmlURL.lastPathComponent)")
+                        if pages.count > 1 {
+                            summary.append("• \(contact.displayName)：\(count) 条 → \(pages.count) 个网页，从 \(pages[0].lastPathComponent) 开始")
+                        } else if let first = pages.first {
+                            summary.append("• \(contact.displayName)：\(count) 条 → \(first.lastPathComponent)")
+                        }
                     }
                 }
 
