@@ -96,6 +96,8 @@ struct AccentButtonStyle: ButtonStyle {
 
 struct ContentView: View {
     @ObservedObject var model: AppViewModel
+    /// 已折叠的分组。公众号动辄三百多个，默认收起，其余展开。
+    @State private var collapsedKinds: Set<ContactKind> = [.official, .other]
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
@@ -133,15 +135,17 @@ struct ContentView: View {
             headerCard
                 .padding(16)
 
+            // 刻意不用 Section：macOS 会把带 Section 的 List 渲染成 NSOutlineView，
+            // 它自带一套折叠状态，和我们自己的状态会打架（表现为折叠情况与代码写的对不上）。
+            // 这里把分组标题当成普通行铺平，折叠完全自己说了算。
             List(selection: $model.selectedIDs) {
-                ForEach(model.groupedContacts) { group in
-                    Section {
-                        ForEach(group.items) { contact in
-                            ContactRow(contact: contact)
-                                .tag(contact.id)
-                        }
-                    } header: {
+                ForEach(model.sidebarRows(collapsed: collapsedKinds, expandAll: isSearching)) { row in
+                    switch row {
+                    case .header(let group):
                         sectionHeader(for: group)
+                    case .contact(let contact):
+                        ContactRow(contact: contact)
+                            .tag(contact.id)
                     }
                 }
             }
@@ -153,21 +157,41 @@ struct ContentView: View {
         .navigationTitle("微信聊天记录导出")
     }
 
-    /// 分组标题：类型图标 + 名称 + 已选数 + 总数徽标（点徽标可全选/取消该类）。
-    ///
-    /// 折叠交给 macOS 的 List 自己做——它把带 Section 的 List 渲染成 NSOutlineView，
-    /// 原生就带折叠三角。自己再加一套折叠状态会和它打架（试过，两边状态对不上）。
-    private func sectionHeader(for group: AppViewModel.ContactGroup) -> some View {
-        let selected = model.selectionCount(for: group.kind)
-        return HStack(spacing: 6) {
-            Image(systemName: group.kind.icon)
-                .font(.caption)
-                .foregroundStyle(AppTheme.accent)
-            Text(group.kind.rawValue)
-                .font(.subheadline.weight(.semibold))
-                .tracking(0.5)
+    private var isSearching: Bool {
+        !model.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
-            Spacer()
+    /// 分组标题行：折叠三角 + 类型图标 + 名称 + 已选数 + 总数徽标。
+    /// 点标题左半区折叠 / 展开，点右侧徽标全选 / 取消该类。
+    private func sectionHeader(for group: AppViewModel.ContactGroup) -> some View {
+        // 搜索时一律展开：否则命中的会话会被折叠的分组藏起来，看着像搜不到
+        let collapsed = !isSearching && collapsedKinds.contains(group.kind)
+        let selected = model.selectionCount(for: group.kind)
+
+        return HStack(spacing: 6) {
+            Button {
+                if collapsedKinds.contains(group.kind) {
+                    collapsedKinds.remove(group.kind)
+                } else {
+                    collapsedKinds.insert(group.kind)
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2.weight(.bold))
+                        .rotationEffect(.degrees(collapsed ? 0 : 90))
+                        .frame(width: 10)
+                    Image(systemName: group.kind.icon)
+                        .font(.caption)
+                    Text(group.kind.rawValue)
+                        .font(.subheadline.weight(.semibold))
+                        .tracking(0.5)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(collapsed ? "展开\(group.kind.rawValue)" : "折叠\(group.kind.rawValue)")
 
             if selected > 0 {
                 Text("已选 \(selected)")
@@ -188,6 +212,9 @@ struct ContentView: View {
             .buttonStyle(.plain)
             .help("全选或取消该类下的 \(group.items.count) 个会话")
         }
+        .foregroundStyle(AppTheme.accent)
+        .padding(.vertical, 4)
+        .listRowSeparator(.hidden)
     }
 
     private var headerCard: some View {

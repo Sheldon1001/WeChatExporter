@@ -672,12 +672,14 @@ final class WxCliService {
     }
 
     private static func mapSessions(_ sessions: [WxCliSession]) -> [ContactItem] {
-        sessions
+        // 取一次公众号名单给整批复用，避免每条会话都去加一次锁
+        let officialAccounts = OfficialAccountIndex.usernames()
+        return sessions
             .filter { !$0.username.isEmpty && $0.username != "@placeholder_foldgroup" }
             .map { session in
                 let username = session.username
                 let display = cleanDisplayName(session.displayName ?? username, username: username)
-                let kind = ContactKind.classify(username: username)
+                let kind = ContactKind.classify(username: username, officialAccounts: officialAccounts)
                 let ts = session.sortTimestamp ?? 0
                 return ContactItem(
                     id: username,

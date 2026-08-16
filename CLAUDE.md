@@ -34,11 +34,20 @@ cd windows && ./build.ps1              # 产物 windows/dist/WeChatExporter/
 cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 ```
 
-仓库**没有测试代码**，CI 也不跑测试——验证靠编译通过 + 实际运行 `.app`。CI（`.github/workflows/ci.yml`）额外校验两个内置二进制：wx-cli 的 `doctor` 输出含 `All checks passed` 且 strings 里能找到 `4.1.11`；ffmpeg 含 `libmp3lame`/`gif` 编码器、`hevc` 解码器、`palettegen` 滤镜，能端到端跑通语音通路，且无非系统动态库依赖。**替换 `vendor/macos/` 下任一二进制时必须保持这些成立**，否则 CI 直接失败。
+仓库**没有测试代码**，CI 也不跑测试——验证靠编译通过 + 实际运行 `.app`。CI（`.github/workflows/ci.yml`）额外校验两个内置二进制：wx-cli 的 `doctor` 输出含 `All checks passed` 且 strings 里能找到 `4.1.11`；ffmpeg / ffprobe 则逐项核对编解码器、滤镜、封装器，再端到端跑通语音（PCM→MP3）、WXGF 静图（HEVC→PNG）、WXGF 动图（palettegen→GIF）与 ffprobe 数帧四条通路，并确认无非系统动态库依赖。**替换 `vendor/macos/` 下任一二进制时必须保持这些成立**，否则 CI 直接失败。
 
-要验证纯逻辑（如 HTML 渲染、媒体归档）而不想开 GUI，可以用 `swiftc` 把相关源文件连同一个临时 `main.swift` 单独编成一个命令行程序跑——`SingleFileExporter` 的依赖闭包是 `ImageExporter`、`WXGFTranscoder`、`StickerPackExporter`、`WxCliService`、`AppPaths`、`DatImageDecoder`、`SQLiteDatabase`、`EmojiExporter` 加 `Models/`。
+### 怎么验证
 
-调试提示：`swift run` 跑出来的是裸可执行文件，没有 app bundle，因此拿不到 `Bundle.main.resourceURL` 里的 wx-cli（会退回 native backend），版本号也会读成 `0.0.0`。要验证真实行为必须 `./build_app.sh` 后打开 `.app`。
+三种手段，按代价从低到高：
+
+1. **`swiftc` 单编命令行程序**——验证纯逻辑（HTML 渲染、媒体归档、分类、并发下载）最快。把相关源文件连同一个临时 `main.swift` 一起编即可。`SingleFileExporter` 的依赖闭包是 `ImageExporter`、`WXGFTranscoder`、`StickerPackExporter`、`WxCliService`、`AppPaths`、`DatImageDecoder`、`SQLiteDatabase`、`EmojiExporter`、`MediaOrganizer`、`ConcurrentMap` 加 `Models/`。
+2. **`./build_app.sh` 后打开 `.app`**——凡是涉及 `Bundle.main`、网络、进程环境的，**只能这样验**。
+3. **`screencapture` + `osascript` 点击**——验证 UI 行为（分组、折叠、全选）。窗口坐标用 `System Events` 取 `position of window 1`。注意先 `activate` 再点，否则点击会落到别的窗口。
+
+两个反复踩到的陷阱：
+
+- `swift run` 跑出来的是裸可执行文件，没有 app bundle，拿不到 `Bundle.main.resourceURL` 里的 wx-cli（会退回 native backend），版本号也读成 `0.0.0`。
+- **裸命令行程序不受 ATS 管辖**。同一段下载代码，命令行全过、`.app` 里全挂（`URLError -1022`）。凡是验网络请求，必须在真 `.app` 里做——这个坑让一个「已验证通过」的结论错了一整轮。
 
 ## 架构
 
@@ -83,7 +92,7 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 
 ### 导出管线
 
-`AppViewModel.exportSelected()` 对每个会话：建临时目录 → `wx-cli export` 写 json（必要时再写 txt）→ 后处理 → 按 `ExportMode` 决定落盘形态 → 删临时目录。
+`AppViewModel.exportSelected()` 对每个会话：建临时目录 → `wx-cli export` 写 json（必要时再写 txt）→ 后处理 → 按 `ExportMode` 决定落盘形态 → 删临时目录。后处理链：`normalizeExportArtifacts`（把 `联系人_日期.json` 统一复制成 `chat.json`/`chat.txt`，并从 JSON 生成带 BOM 的 `chat.csv`）、含媒体时再跑 `EmojiExporter` → `ImageExporter`（内部调 `DatImageDecoder` 解 `.dat`、`WXGFTranscoder` 转 WXGF）。
 
 **别再把 txt 和 json 都跑成含媒体。** wx-cli 每一趟 `export` 都会完整重做图片解密与语音转码，跑两趟等于媒体活干两遍（实测 4413 个媒体文件的群聊：72s + 74s）。所以 `export(needsPlainText:)` 在网页导出下为 `false`，直接省掉 txt 那趟。注意**不能改用 `--no-media` 来省**：txt 里的 `[图片1] media/xxx.png` 附件索引会整段消失（实测少 4416 行），分类导出与全部导出要把 chat.txt 交给用户，必须跑真的那一趟。含媒体时两趟都会带 `--parallel`（`WxCliService.mediaParallelism`，默认 `min(CPU,4)` 太保守，实测 74s → 41s）。
 
@@ -93,13 +102,11 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 
 这两个服务都用 `ConcurrentMap.run` 跑批（表情 8 路、图片 6 路并发），并各自设了时间预算（120s / 180s）。预算是必须的：微信 CDN 链接过期是常态，没有上限的话几千个失效链接足以让导出永远跑不完。单请求超时也要短——表情只有几十 KB，默认 30 秒纯属浪费。
 
-**ATS 例外不能删。** 微信 CDN 的媒体几乎全是明文 `http://`（实测 44570 : 560），App Transport Security 默认拦截，报 `URLError -1022`。`build_app.sh` 生成的 Info.plist 里为腾讯 / 微信的 CDN 根域配了 `NSExceptionDomains`。
-
-> 验证这类问题**必须在真正的 `.app` 里做**。ATS 只对有 Info.plist 的 bundle 生效，用 `swiftc` 编出来的裸命令行程序不受管辖——同一段下载代码命令行全过、`.app` 里全挂，这个坑踩过一次。
+**ATS 例外不能删。** 微信 CDN 的媒体几乎全是明文 `http://`（实测 44570 : 560），App Transport Security 默认拦截，报 `URLError -1022`。`build_app.sh` 生成的 Info.plist 里为腾讯 / 微信的 CDN 根域（qq.com、qpic.cn、qlogo.cn、wechat.com、tenpay.com、gtimg.com）配了 `NSExceptionDomains`，没有用 `NSAllowsArbitraryLoads` 全局关闭。换了新的 CDN 域名要往这里加。
 
 ### 媒体缺失是常态，要如实呈现
 
-微信本地并不保存所有媒体：实测一个群里 308 个视频、9 条语音在本机根本没有文件（wx-cli 报 `video(s) skipped — not found after hardlink + directory scan`），2927 张图只有缩略图。此时 wx-cli 的 snippet 会退化成 `[video <md5>]` 这种「类型 + 内容哈希」。`SingleFileExporter.cleanContent` 负责把它规整成 `[视频]`，`missingMediaNote` 再把它换成说明为什么没有、以及怎么补救的文案——不要让用户对着一串十六进制猜。后处理链：`normalizeExportArtifacts`（把 `联系人_日期.json` 统一复制成 `chat.json`/`chat.txt`，并从 JSON 生成带 BOM 的 `chat.csv`）、含媒体时再跑 `EmojiExporter` → `ImageExporter`（内部调 `DatImageDecoder` 解 `.dat`、`WXGFTranscoder` 转 WXGF）。
+微信本地并不保存所有媒体：实测一个群里 308 个视频、9 条语音在本机根本没有文件（wx-cli 报 `video(s) skipped — not found after hardlink + directory scan`），2927 张图只有缩略图。此时 wx-cli 的 snippet 会退化成 `[video <md5>]` 这种「类型 + 内容哈希」。`SingleFileExporter.cleanContent` 负责把它规整成 `[视频]`，`missingMediaNote` 再把它换成说明为什么没有、以及怎么补救的文案——不要让用户对着一串十六进制猜。
 
 `ExportMode`（持久化在 UserDefaults `export.mode`）：
 - `categorized`（默认）→ `MediaOrganizer.organize` 归档到 `<联系人>/{文字,图片,视频,语音,其他}/`
@@ -117,9 +124,18 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 
 ### 会话分类
 
-`ContactKind.classify(username:isGroupType:)`（`Models/ContactItem.swift`）是**唯一**的分类入口，wx-cli 与 native 两个后端都走它——早先两边各写了一份 if-else，很容易分叉。判定依据（实测 875 个会话：公众号 360、好友 316、群聊 136、其他 63）：`*@chatroom` 是群聊，`gh_*` 是公众号，保留字与 `@` 开头是系统会话，含 `@` 的（`*@openim` / `*@kefu.openim`）是企业微信与客服，其余归好友。
+`ContactKind.classify(username:isGroupType:officialAccounts:)`（`Models/ContactItem.swift`）是**唯一**的分类入口，wx-cli 与 native 两个后端都走它——早先两边各写了一份 if-else，很容易分叉。
 
-侧栏按 `AppViewModel.groupedContacts` 分组显示，组内保持按时间排序。**折叠交给系统**：macOS 的 `List` + `Section` 会渲染成 `NSOutlineView`，原生自带折叠三角；自己再维护一套 `collapsedKinds` 会和它打架，两边状态对不上（试过，表现为默认折叠状态与代码里写的完全不符）。
+**光看 username 分不出公众号。** 微信里不少公众号的 username 就是 `wxid_` 开头，和真人好友完全同构（多家媒体号、银行服务号都是这种形态），只按前缀判断会把它们全判成好友。真正的判据是 `contact` 表的 `verify_flag`：非 0 即为认证过的公众号 / 服务号（订阅号 24、服务号 28/29、媒体号 1048；实测一份真实数据里 25336 个 0、730 个非 0）。wx-cli 的 `sessions` 输出不带这个字段，所以 `OfficialAccountIndex` 直接读它解密缓存里的 `contact.db`（定位手法与 `StickerPackExporter.locateEmoticonDB` 一致），读一次缓存住。读不到时退回按前缀判断，不会崩。
+
+实测 875 个会话：公众号 370、好友 306、群聊 136、其他 63。
+
+侧栏按 `AppViewModel.sidebarRows(collapsed:expandAll:)` 渲染，组内保持按时间排序。这里有两个踩过的坑：
+
+- **不要用 `Section`。** macOS 会把带 Section 的 `List` 渲染成 `NSOutlineView`，它自带一套折叠状态，和自己维护的 `collapsedKinds` 会打架——表现为实际折叠情况与代码里写的默认值完全不符。
+- **标题与会话要摊平成单一数组再交给 `ForEach`。** 在 `ForEach` 里混着发标题和条件行，List 差分算不清每行身份，折叠后会留下一片空白行。`SidebarRow` 枚举给每行一个稳定 id 就好了。
+
+搜索时 `expandAll` 强制展开所有分组，否则命中的会话会被折叠的分组藏起来，看着像搜不到。
 
 ### 进度与日志
 

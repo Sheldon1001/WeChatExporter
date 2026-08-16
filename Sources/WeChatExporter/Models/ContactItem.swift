@@ -39,17 +39,30 @@ enum ContactKind: String, CaseIterable {
 
     /// 依 username 判定会话类型。两个后端（wx-cli 与 native）都走这里，避免各写一份而分叉。
     ///
-    /// 判定依据（实测 875 个会话：公众号 360、好友 316、群聊 136、其他 63）：
-    /// - `*@chatroom` 是群聊；`gh_*` 是公众号
-    /// - `*@openim` / `*@kefu.openim` 是企业微信联系人与客服会话
+    /// 判定顺序：
+    /// - `*@chatroom` 是群聊
+    /// - `gh_*` 是公众号
     /// - 保留字与 `@` 开头的是系统会话（服务通知、折叠的群聊等）
-    /// - 其余（`wxid_*` 与用户自定义微信号）都算好友
-    static func classify(username: String, isGroupType: Bool = false) -> ContactKind {
+    /// - 含 `@` 的（`*@openim` / `*@kefu.openim`）是企业微信联系人与客服会话
+    /// - **`verify_flag != 0` 的也是公众号**：微信里不少公众号的 username 就是 `wxid_` 开头，
+    ///   与真人好友完全同构（媒体号、银行服务号多是这种），只看前缀会误判成好友。
+    ///   名单由 `OfficialAccountIndex` 从解密后的 `contact.db` 读出。
+    /// - 其余都算好友
+    ///
+    /// - Parameter officialAccounts: 已认证公众号名单。传 nil 时现取（内部有缓存）；
+    ///   批量分类时建议由调用方取一次传进来，省得每条都走一次加锁。
+    static func classify(
+        username: String,
+        isGroupType: Bool = false,
+        officialAccounts: Set<String>? = nil
+    ) -> ContactKind {
         if username.hasSuffix("@chatroom") || isGroupType { return .group }
         if username.hasPrefix("gh_") { return .official }
         if username.hasPrefix("@") || systemUsernames.contains(username) { return .other }
         // 企业微信 / 客服：形如 25984982075192595@openim
         if username.contains("@") { return .other }
+        let verified = officialAccounts ?? OfficialAccountIndex.usernames()
+        if verified.contains(username) { return .official }
         return .friend
     }
 }

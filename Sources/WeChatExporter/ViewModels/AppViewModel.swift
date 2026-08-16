@@ -114,6 +114,33 @@ final class AppViewModel: ObservableObject {
             .sorted { $0.kind.sortOrder < $1.kind.sortOrder }
     }
 
+    /// 侧栏的一行：要么是分组标题，要么是一个会话。
+    ///
+    /// 摊平成单一数组再交给 `ForEach`，而不是在 `ForEach` 里混着发标题和条件行——
+    /// 后者会让 List 的差分算不清每行的身份，折叠时留下一片空白行。
+    enum SidebarRow: Identifiable {
+        case header(ContactGroup)
+        case contact(ContactItem)
+
+        var id: String {
+            switch self {
+            case .header(let g): return "header:\(g.kind.rawValue)"
+            case .contact(let c): return "contact:\(c.id)"
+            }
+        }
+    }
+
+    func sidebarRows(collapsed: Set<ContactKind>, expandAll: Bool) -> [SidebarRow] {
+        var rows: [SidebarRow] = []
+        for group in groupedContacts {
+            rows.append(.header(group))
+            if expandAll || !collapsed.contains(group.kind) {
+                rows.append(contentsOf: group.items.map(SidebarRow.contact))
+            }
+        }
+        return rows
+    }
+
     /// 选中某一类下的全部会话——公众号有三百多个，逐个点不现实。
     func toggleSelection(for kind: ContactKind) {
         let ids = Set(filteredContacts.filter { $0.kind == kind }.map(\.id))
