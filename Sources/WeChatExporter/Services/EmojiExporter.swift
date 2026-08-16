@@ -299,6 +299,10 @@ enum EmojiExporter {
                 }
             } catch let error as URLError where error.code == .timedOut {
                 lastReason = "连接超时"
+            } catch let error as URLError where error.code == .appTransportSecurityRequiresSecureConnection {
+                // 微信 CDN 几乎全是明文 http://，Info.plist 里缺少 ATS 例外就会整批栽在这里。
+                // 单独归类，免得被「网络错误」掩盖成看不出所以然的问题。
+                return .failure("被 App Transport Security 拦截（应用配置问题，请反馈）")
             } catch {
                 lastReason = "网络错误"
             }

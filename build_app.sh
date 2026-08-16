@@ -9,7 +9,7 @@ ICON_SRC="$ROOT/assets/AppIcon.icns"
 ICON_PNG="$ROOT/assets/AppIcon.png"
 WX_CLI_VERSION="${WX_CLI_VERSION:-vendor}"
 APP_VERSION="${APP_VERSION:-2.14.0}"
-APP_BUILD="${APP_BUILD:-31}"
+APP_BUILD="${APP_BUILD:-32}"
 
 echo "编译原生 macOS 应用…"
 cd "$ROOT"
@@ -86,6 +86,47 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
     <true/>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.utilities</string>
+    <!--
+      微信 CDN 上的表情、图片、视频几乎全是明文 http://（实测 44570 个 http 对 560 个 https），
+      而 App Transport Security 默认拦截明文请求——不开例外的话表情会全数「网络错误」下载失败。
+      这里只对腾讯 / 微信的 CDN 根域放行，不使用 NSAllowsArbitraryLoads 全局关闭。
+    -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSExceptionDomains</key>
+        <dict>
+            <key>qq.com</key>
+            <dict>
+                <key>NSIncludesSubdomains</key><true/>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key><true/>
+            </dict>
+            <key>qpic.cn</key>
+            <dict>
+                <key>NSIncludesSubdomains</key><true/>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key><true/>
+            </dict>
+            <key>qlogo.cn</key>
+            <dict>
+                <key>NSIncludesSubdomains</key><true/>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key><true/>
+            </dict>
+            <key>wechat.com</key>
+            <dict>
+                <key>NSIncludesSubdomains</key><true/>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key><true/>
+            </dict>
+            <key>tenpay.com</key>
+            <dict>
+                <key>NSIncludesSubdomains</key><true/>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key><true/>
+            </dict>
+            <key>gtimg.com</key>
+            <dict>
+                <key>NSIncludesSubdomains</key><true/>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key><true/>
+            </dict>
+        </dict>
+    </dict>
 </dict>
 </plist>
 PLIST

@@ -598,6 +598,16 @@ enum SingleFileExporter {
       line-height: 1.65;
       color: rgba(240,248,255,0.94);
     }
+    .missing {
+      margin: 0;
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--subtext);
+      background: rgba(140,170,210,0.06);
+      border: 1px dashed rgba(140,170,210,0.28);
+    }
     .pager {
       display: flex;
       flex-wrap: wrap;
@@ -733,10 +743,20 @@ enum SingleFileExporter {
         }
 
         let plain = cleanContent(row.content)
-        let content = escapeAndLinkify(plain)
-        // 媒体已经渲染出来时，正文再重复一个占位标签只会碍眼；
-        // 但媒体缺失时必须留着，否则整张卡片会是空的
-        let showText = !plain.isEmpty && !(redundantPlaceholders.contains(plain) && !mediaHTML.isEmpty)
+        let isBarePlaceholder = redundantPlaceholders.contains(plain)
+
+        // 媒体已经渲染出来时，正文再重复一个占位标签只会碍眼。
+        // 媒体没渲染出来时也不要只留一个 `[视频]`——换成说明为什么没有、怎么办。
+        let bodyHTML: String
+        if isBarePlaceholder, !mediaHTML.isEmpty {
+            bodyHTML = ""
+        } else if isBarePlaceholder, let note = missingMediaNote(for: plain) {
+            bodyHTML = note
+        } else if plain.isEmpty {
+            bodyHTML = ""
+        } else {
+            bodyHTML = "<div class=\"text\">\(escapeAndLinkify(plain))</div>"
+        }
 
         return """
             <article class="msg">
@@ -745,7 +765,7 @@ enum SingleFileExporter {
                 <span class="type">\(escapeHTML(row.type))</span>
                 <span class="time">\(escapeHTML(row.time))</span>
               </div>
-              \(showText ? "<div class=\"text\">\(content)</div>" : "")
+              \(bodyHTML)
               \(mediaHTML.isEmpty ? "" : "<div class=\"media\">\(mediaHTML)</div>")
             </article>
 
@@ -1022,6 +1042,14 @@ enum SingleFileExporter {
             if text.hasPrefix("["), !text.hasSuffix("]") { text += "]" }
         }
 
+        // wx-cli 拿不到媒体文件时，snippet 会退化成 `[video 9e5873e9d5…]` 这种
+        // 「类型 + 内容 md5」的形式。直接渲染就是一串没人看得懂的十六进制。
+        if let match = text.range(of: #"^\[(video|image|voice|emoji|file) [0-9a-fA-F]{16,}\]$"#,
+                                  options: .regularExpression) {
+            let kind = text[match].dropFirst().split(separator: " ")[0]
+            text = "[\(kind)]"
+        }
+
         switch text {
         case "[emoji]": return "[动画表情]"
         case "[voice]": return "[语音]"
@@ -1031,6 +1059,27 @@ enum SingleFileExporter {
         case "[system]": return "[系统消息]"
         default: return text
         }
+    }
+
+    /// 一条消息只剩占位标签、却没有任何媒体渲染出来时，给出可操作的说明，
+    /// 而不是甩一个孤零零的 `[视频]` 让人以为是导出坏了。
+    private static func missingMediaNote(for placeholder: String) -> String? {
+        let reason: String
+        switch placeholder {
+        case "[视频]":
+            reason = "该视频没有保存在这台电脑上，微信只留了记录。在微信里打开这条消息让它下载完成后，重新导出即可包含。"
+        case "[图片]":
+            reason = "原图没有保存在这台电脑上。在微信里打开这条消息让它下载完成后，重新导出即可包含。"
+        case "[动画表情]":
+            reason = "这张表情已无法从微信服务器取回（CDN 链接会随时间过期）。"
+        case "[语音]":
+            reason = "这条语音没有保存在这台电脑上，无法导出。"
+        case "[文件]":
+            reason = "该文件没有保存在这台电脑上，无法导出。"
+        default:
+            return nil
+        }
+        return "<p class=\"missing\">\(escapeHTML(placeholder.dropFirst().dropLast() + "：" + reason))</p>"
     }
 
     /// 用 RFC 3986 的字符允许表而不是排除表：中文聊天里 URL 后面常常紧跟汉字没有空格，

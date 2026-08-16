@@ -91,7 +91,15 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 
 **`EmojiExporter` / `ImageExporter` 里下载前一定要先按内容去重。** 群聊里同一张表情会被反复发送——实测一个群有 3095 处表情引用，唯一 URL 只有 1190 个，最热的一张出现 139 次。早先的写法给每次出现都用 `uniqueFilename` 起新名字（`md5_2.gif`、`md5_3.gif`…），`fileExists` 因此永远命不中，同一张图被重复下载上百遍，导出直接卡死在「正在下载表情」。现在先收集引用、按 URL（图片按 md5/aeskey）建唯一任务表，下载完再把同一个文件挂回所有引用它的消息。
 
-这两个服务都用 `ConcurrentMap.run` 跑批（表情 8 路、图片 6 路并发），并各自设了时间预算（120s / 180s）。预算是必须的：微信 CDN 链接过期是常态，没有上限的话几千个失效链接足以让导出永远跑不完。单请求超时也要短——表情只有几十 KB，默认 30 秒纯属浪费。后处理链：`normalizeExportArtifacts`（把 `联系人_日期.json` 统一复制成 `chat.json`/`chat.txt`，并从 JSON 生成带 BOM 的 `chat.csv`）、含媒体时再跑 `EmojiExporter` → `ImageExporter`（内部调 `DatImageDecoder` 解 `.dat`、`WXGFTranscoder` 转 WXGF）。
+这两个服务都用 `ConcurrentMap.run` 跑批（表情 8 路、图片 6 路并发），并各自设了时间预算（120s / 180s）。预算是必须的：微信 CDN 链接过期是常态，没有上限的话几千个失效链接足以让导出永远跑不完。单请求超时也要短——表情只有几十 KB，默认 30 秒纯属浪费。
+
+**ATS 例外不能删。** 微信 CDN 的媒体几乎全是明文 `http://`（实测 44570 : 560），App Transport Security 默认拦截，报 `URLError -1022`。`build_app.sh` 生成的 Info.plist 里为腾讯 / 微信的 CDN 根域配了 `NSExceptionDomains`。
+
+> 验证这类问题**必须在真正的 `.app` 里做**。ATS 只对有 Info.plist 的 bundle 生效，用 `swiftc` 编出来的裸命令行程序不受管辖——同一段下载代码命令行全过、`.app` 里全挂，这个坑踩过一次。
+
+### 媒体缺失是常态，要如实呈现
+
+微信本地并不保存所有媒体：实测一个群里 308 个视频、9 条语音在本机根本没有文件（wx-cli 报 `video(s) skipped — not found after hardlink + directory scan`），2927 张图只有缩略图。此时 wx-cli 的 snippet 会退化成 `[video <md5>]` 这种「类型 + 内容哈希」。`SingleFileExporter.cleanContent` 负责把它规整成 `[视频]`，`missingMediaNote` 再把它换成说明为什么没有、以及怎么补救的文案——不要让用户对着一串十六进制猜。后处理链：`normalizeExportArtifacts`（把 `联系人_日期.json` 统一复制成 `chat.json`/`chat.txt`，并从 JSON 生成带 BOM 的 `chat.csv`）、含媒体时再跑 `EmojiExporter` → `ImageExporter`（内部调 `DatImageDecoder` 解 `.dat`、`WXGFTranscoder` 转 WXGF）。
 
 `ExportMode`（持久化在 UserDefaults `export.mode`）：
 - `categorized`（默认）→ `MediaOrganizer.organize` 归档到 `<联系人>/{文字,图片,视频,语音,其他}/`
