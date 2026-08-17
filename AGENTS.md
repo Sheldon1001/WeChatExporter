@@ -12,14 +12,16 @@
 
 2. **本地编译验证**：
    - macOS：`swift build --disable-sandbox -c release`（须 Build complete）
-   - Windows：`dotnet build windows/WeChatExporter.Windows/WeChatExporter.Windows.csproj -c Release`
+   - Windows：`dotnet build windows/WeChatExporter.Windows/WeChatExporter.Windows.csproj -c Release`（macOS 上需加 `-p:EnableWindowsTargeting=true`）
+   - **本地过不等于 CI 过**：CI 的 macos-14 runner 是 Swift 5.10，本机可能是 6.x。并发相关的写法（如内层 `Task` 复用外层闭包的 `weak self`）在本地只是警告，在 CI 上直接报 `reference to captured var 'self'`。这类错只有推上去才看得到
 
 3. **提交并打标签**：
    ```bash
    git add -A
    git commit -m "类型(scope): 描述 (vX.Y.Z)"
    git tag vX.Y.Z
-   git push origin main --tags
+   git push origin main
+   git push origin vX.Y.Z   # 只推这一个标签；--tags 会把本地所有旧标签一起推上去，每个都会触发一次 Release 构建
    ```
 
 4. **等待 GitHub Actions 自动发布**（`.github/workflows/release.yml` 监听 `v*` 标签）：
