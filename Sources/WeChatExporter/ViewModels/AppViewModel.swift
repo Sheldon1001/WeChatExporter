@@ -428,6 +428,9 @@ final class AppViewModel: ObservableObject {
 
         let mode = exportMode
         let base = URL(fileURLWithPath: exportPath.expandingTildeInPath, isDirectory: true)
+        // 一次导出全程共用一个时间戳：每个会话各自落到 <联系人>_<时间戳>/ 里，
+        // 同一批导出的文件夹在文件管理器里排在一起，重复导出也不会覆盖上一次的结果
+        let runStamp = ExportNaming.stamp()
         var summary: [String] = []
         do {
             try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
@@ -458,41 +461,43 @@ final class AppViewModel: ObservableObject {
                         onProgress: exportProgressHandler(base: progressBase, span: progressSpan, prefix: prefix)
                     )
 
+                    // 每个会话的产物都进自己的文件夹，不再摊在导出根目录里
+                    let folderName = ExportNaming.folderName(contact: contact.displayName, stamp: runStamp)
+                    let contactDir = base.appendingPathComponent(folderName, isDirectory: true)
+
                     switch mode {
                     case .categorized:
-                        // 按分类归档：文字 / 图片 / 视频 / 其他
+                        // 按分类归档：文字 / 图片 / 视频 / 语音 / 其他
                         let result = try MediaOrganizer.organize(
                             sourceDir: tempDir,
-                            into: base,
-                            contactName: contact.displayName,
+                            into: contactDir,
                             log: logHandler()
                         )
-                        summary.append("• \(contact.displayName)：\(count) 条（文字 \(result.textCount)、图片 \(result.imageCount)、视频 \(result.videoCount)、语音 \(result.audioCount)、其他 \(result.otherCount)）")
+                        summary.append("• \(contact.displayName)：\(count) 条 → \(folderName)/（文字 \(result.textCount)、图片 \(result.imageCount)、视频 \(result.videoCount)、语音 \(result.audioCount)、其他 \(result.otherCount)）")
                     case .textOnly:
                         // 只导出文字文件
-                        let contactDir = base.appendingPathComponent(contact.displayName, isDirectory: true)
                         try FileManager.default.createDirectory(at: contactDir, withIntermediateDirectories: true)
                         try copyTextArtifacts(from: tempDir, to: contactDir)
-                        summary.append("• \(contact.displayName)：\(count) 条（仅文字）")
+                        summary.append("• \(contact.displayName)：\(count) 条 → \(folderName)/（仅文字）")
                     case .all:
                         // 全部导出：文字 + 原始媒体文件夹，保持目录结构
-                        let contactDir = base.appendingPathComponent(contact.displayName, isDirectory: true)
                         try FileManager.default.createDirectory(at: contactDir, withIntermediateDirectories: true)
                         try copyAllArtifacts(from: tempDir, to: contactDir)
-                        summary.append("• \(contact.displayName)：\(count) 条（文字 + 媒体文件）")
+                        summary.append("• \(contact.displayName)：\(count) 条 → \(folderName)/（文字 + 媒体文件）")
                     case .singleFileHTML:
-                        // 网页导出：图片/表情/语音内嵌，视频与大附件放进同名 _media 目录外链；
-                        // 超过 1000 条自动分卷，返回的是全部页面
+                        // 网页导出：图片/表情/语音内嵌，视频与大附件按类型放进 media/ 外链；
+                        // 超过 1000 条自动分卷，返回的是全部页面（都在 folderName 这个文件夹里）
                         let pages = try SingleFileExporter.writeHTML(
                             from: tempDir,
                             contactName: contact.displayName,
                             into: base,
-                            embedMedia: true
+                            embedMedia: true,
+                            stamp: runStamp
                         )
                         if pages.count > 1 {
-                            summary.append("• \(contact.displayName)：\(count) 条 → \(pages.count) 个网页，从 \(pages[0].lastPathComponent) 开始")
+                            summary.append("• \(contact.displayName)：\(count) 条 → \(folderName)/（\(pages.count) 个网页，从 \(pages[0].lastPathComponent) 开始）")
                         } else if let first = pages.first {
-                            summary.append("• \(contact.displayName)：\(count) 条 → \(first.lastPathComponent)")
+                            summary.append("• \(contact.displayName)：\(count) 条 → \(folderName)/\(first.lastPathComponent)")
                         }
                     }
                 }
@@ -506,7 +511,7 @@ final class AppViewModel: ObservableObject {
                     if stickerCount > 0 {
                         if mode == .singleFileHTML {
                             // 网页导出下表情包也出一张画廊网页，与聊天记录的形态保持一致
-                            if let galleryURL = try? SingleFileExporter.writeStickerGallery(from: stickerTemp, into: base) {
+                            if let galleryURL = try? SingleFileExporter.writeStickerGallery(from: stickerTemp, into: base, stamp: runStamp) {
                                 summary.append("• 全部表情包：\(stickerCount) 张 → \(galleryURL.lastPathComponent)")
                             }
                         } else {
@@ -540,10 +545,11 @@ final class AppViewModel: ObservableObject {
                         decryptedDir: paths.decryptedDir,
                         outputDir: tempDir
                     )
-                    let contactDir = base.appendingPathComponent(contact.displayName, isDirectory: true)
+                    let folderName = ExportNaming.folderName(contact: contact.displayName, stamp: runStamp)
+                    let contactDir = base.appendingPathComponent(folderName, isDirectory: true)
                     try FileManager.default.createDirectory(at: contactDir, withIntermediateDirectories: true)
                     try copyTextArtifacts(from: tempDir, to: contactDir)
-                    summary.append("• \(contact.displayName)：\(count) 条")
+                    summary.append("• \(contact.displayName)：\(count) 条 → \(folderName)/")
                 }
             }
             alertMessage = "已导出 \(selected.count) 个会话到：\n\(base.path)\n\n\(summary.joined(separator: "\n"))\n\n导出方式：\(mode.displayName)"

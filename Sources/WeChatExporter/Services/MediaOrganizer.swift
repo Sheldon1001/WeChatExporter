@@ -11,6 +11,16 @@ enum MediaOrganizer {
         let otherCount: Int
     }
 
+    /// 媒体分类。分类名同时是分类导出的文件夹名，也是网页导出 `media/` 下的子目录名——
+    /// 两条通路共用这一张表，免得两边各写一份扩展名列表再慢慢分叉。
+    enum Category: String, CaseIterable {
+        case text = "文字"
+        case image = "图片"
+        case video = "视频"
+        case audio = "语音"
+        case other = "其他"
+    }
+
     /// 文字类扩展名
     private static let textExts: Set<String> = ["txt", "json", "csv", "md"]
     /// 图片类扩展名
@@ -20,22 +30,30 @@ enum MediaOrganizer {
     /// 语音类扩展名。`silk` 是微信原始语音格式，ffmpeg 缺失时 wx-cli 会降级导出它
     private static let audioExts: Set<String> = ["mp3", "m4a", "aac", "wav", "ogg", "opus", "amr", "silk"]
 
-    /// 把 sourceDir 下的文件按类型移动到 destDir/<contactName>/ 下的分类文件夹。
+    /// 按扩展名判断文件属于哪一类
+    static func category(forExtension ext: String) -> Category {
+        let e = ext.lowercased()
+        if textExts.contains(e) { return .text }
+        if imageExts.contains(e) { return .image }
+        if videoExts.contains(e) { return .video }
+        if audioExts.contains(e) { return .audio }
+        return .other
+    }
+
+    /// 把 sourceDir 下的文件按类型移动到 contactDir 下的分类文件夹。
+    /// contactDir 是本次导出该会话的专属文件夹，由调用方按 `ExportNaming.folderName` 拼好。
     /// 返回各分类文件数。
     static func organize(
         sourceDir: URL,
-        into destDir: URL,
-        contactName: String,
+        into contactDir: URL,
         log: @escaping (String) -> Void
     ) throws -> Result {
         let fm = FileManager.default
-        let safeName = sanitizeFilename(contactName.isEmpty ? "聊天记录" : contactName)
-        let contactDir = destDir.appendingPathComponent(safeName, isDirectory: true)
-        let textDir = contactDir.appendingPathComponent("文字", isDirectory: true)
-        let imageDir = contactDir.appendingPathComponent("图片", isDirectory: true)
-        let videoDir = contactDir.appendingPathComponent("视频", isDirectory: true)
-        let audioDir = contactDir.appendingPathComponent("语音", isDirectory: true)
-        let otherDir = contactDir.appendingPathComponent("其他", isDirectory: true)
+        let textDir = contactDir.appendingPathComponent(Category.text.rawValue, isDirectory: true)
+        let imageDir = contactDir.appendingPathComponent(Category.image.rawValue, isDirectory: true)
+        let videoDir = contactDir.appendingPathComponent(Category.video.rawValue, isDirectory: true)
+        let audioDir = contactDir.appendingPathComponent(Category.audio.rawValue, isDirectory: true)
+        let otherDir = contactDir.appendingPathComponent(Category.other.rawValue, isDirectory: true)
 
         for dir in [textDir, imageDir, videoDir, audioDir, otherDir] {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -50,21 +68,21 @@ enum MediaOrganizer {
         // 递归收集所有文件
         let files = collectFiles(in: sourceDir)
         for file in files {
-            let ext = file.pathExtension.lowercased()
             let dest: URL
-            if textExts.contains(ext) {
+            switch category(forExtension: file.pathExtension) {
+            case .text:
                 dest = textDir.appendingPathComponent(file.lastPathComponent)
                 textCount += 1
-            } else if imageExts.contains(ext) {
+            case .image:
                 dest = imageDir.appendingPathComponent(file.lastPathComponent)
                 imageCount += 1
-            } else if videoExts.contains(ext) {
+            case .video:
                 dest = videoDir.appendingPathComponent(file.lastPathComponent)
                 videoCount += 1
-            } else if audioExts.contains(ext) {
+            case .audio:
                 dest = audioDir.appendingPathComponent(file.lastPathComponent)
                 audioCount += 1
-            } else {
+            case .other:
                 dest = otherDir.appendingPathComponent(file.lastPathComponent)
                 otherCount += 1
             }
@@ -159,10 +177,5 @@ enum MediaOrganizer {
             if !fm.fileExists(atPath: candidate.path) { return candidate }
             n += 1
         }
-    }
-
-    private static func sanitizeFilename(_ name: String) -> String {
-        let invalid = CharacterSet(charactersIn: "/\\:?*\"<>|")
-        return name.components(separatedBy: invalid).joined(separator: "_")
     }
 }

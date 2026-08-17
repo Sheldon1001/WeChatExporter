@@ -29,7 +29,8 @@ Get the latest build from **[GitHub Releases](https://github.com/Sheldon1001/WeC
   - **By category** (default): text, images, video and voice filed into separate folders
   - **Text only**: txt / json / csv, fastest
   - **Everything**: text plus the raw media files
-  - **Web page**: a self-contained `.html` with images, stickers and voice inlined; video and large attachments are linked from a sibling `_media/` folder. Split into volumes of 1000 messages with prev/next navigation
+  - **Web page**: a self-contained `.html` with images, stickers and voice inlined; video and large attachments are linked from a `media/` folder. Split into volumes of 1000 messages with prev/next navigation
+- Every export gets its own folder, `<contact>_<timestamp>/`, so repeated exports never overwrite each other; media is filed into 图片 / 视频 / 语音 / 其他 subfolders
 - Playable voice messages (macOS): bundled ffmpeg transcodes WeChat's SILK to MP3
 - Animated WXGF stickers exported as animated GIF (macOS)
 - Live export progress: current chat, stage and media count

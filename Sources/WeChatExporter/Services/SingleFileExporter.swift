@@ -17,11 +17,15 @@ enum SingleFileExporter {
     /// 单个媒体文件超过此大小就不再 base64 内嵌，改走外链，避免单个大文件撑爆 HTML。
     private static let embedSizeLimit = 8 * 1024 * 1024
 
-    /// 外链媒体的落盘目录与其在 HTML 中的相对前缀。目录按需创建——没有外链媒体时不会留下空文件夹。
+    /// 外链媒体的落盘目录与其在 HTML 中的相对前缀。
+    ///
+    /// 文件按扩展名落进 `media/视频`、`media/图片`、`media/语音`、`media/其他` 子目录，
+    /// 分类表与「分类导出」共用 `MediaOrganizer.category`。子目录按需创建——没有外链媒体
+    /// 时不会留下一堆空文件夹。
     final class ExternalMediaSink {
         let directory: URL
         let relativePrefix: String
-        private var created = false
+        private var createdSubdirs = Set<String>()
         private var assignedNames = Set<String>()
 
         init(directory: URL, relativePrefix: String) {
@@ -32,14 +36,19 @@ enum SingleFileExporter {
         /// 把文件拷进外链目录，返回可直接写进 HTML `src` 的相对路径；失败返回 nil。
         func store(_ fileURL: URL) -> String? {
             let fm = FileManager.default
-            if !created {
-                guard (try? fm.createDirectory(at: directory, withIntermediateDirectories: true)) != nil else {
+            // 文字类不会走到外链（HTML 只外链媒体与大附件），归到「其他」
+            let category = MediaOrganizer.category(forExtension: fileURL.pathExtension)
+            let subdirName = category == .text ? MediaOrganizer.Category.other.rawValue : category.rawValue
+            let subdir = directory.appendingPathComponent(subdirName, isDirectory: true)
+            if !createdSubdirs.contains(subdirName) {
+                guard (try? fm.createDirectory(at: subdir, withIntermediateDirectories: true)) != nil else {
                     return nil
                 }
-                created = true
+                createdSubdirs.insert(subdirName)
             }
 
-            // media/ 下可能有同名文件位于不同子目录，这里做一次去重命名
+            // media/ 下可能有同名文件位于不同子目录，这里做一次去重命名。
+            // 去重跨分类进行：同名文件即便分到不同子目录，重名也容易看花眼。
             var name = sanitizeFilename(fileURL.lastPathComponent)
             if assignedNames.contains(name) {
                 let stem = (name as NSString).deletingPathExtension
@@ -52,13 +61,13 @@ enum SingleFileExporter {
                 }
             }
 
-            let dest = directory.appendingPathComponent(name)
+            let dest = subdir.appendingPathComponent(name)
             if fm.fileExists(atPath: dest.path) {
                 try? fm.removeItem(at: dest)
             }
             guard (try? fm.copyItem(at: fileURL, to: dest)) != nil else { return nil }
             assignedNames.insert(name)
-            return "\(urlEncodePathComponent(relativePrefix))/\(urlEncodePathComponent(name))"
+            return "\(urlEncodePathComponent(relativePrefix))/\(urlEncodePathComponent(subdirName))/\(urlEncodePathComponent(name))"
         }
     }
 
@@ -66,17 +75,21 @@ enum SingleFileExporter {
     /// 几百 MB 的 HTML，浏览器打开就卡死。
     static let defaultMessagesPerPage = 1000
 
-    /// 从已导出的临时目录生成 HTML，写入 `destinationDir`，返回全部页面的 URL（按顺序，首页在前）。
+    /// 从已导出的临时目录生成 HTML，返回全部页面的 URL（按顺序，首页在前）。
     ///
-    /// 消息数超过 `messagesPerPage` 时自动分卷，各卷共用同一个外链媒体目录，页眉带上下页导航。
+    /// 产物落在 `destinationDir/<联系人>_<时间戳>/` 这一个专属文件夹里：网页与 `media/`
+    /// 都在其中，导多个会话时互不混淆。消息数超过 `messagesPerPage` 时自动分卷，各卷共用
+    /// 同一个媒体目录，页眉带上下页导航。
     /// - Parameter embedMedia: 为 true 时将媒体以 base64 内嵌到 HTML；为 false 时仅生成纯文字版本。
+    /// - Parameter stamp: 时间戳，传 nil 则取当前时间。同一批导出应传同一个值。
     @discardableResult
     static func writeHTML(
         from sourceDir: URL,
         contactName: String,
         into destinationDir: URL,
         embedMedia: Bool = false,
-        messagesPerPage: Int = defaultMessagesPerPage
+        messagesPerPage: Int = defaultMessagesPerPage,
+        stamp: String? = nil
     ) throws -> [URL] {
         let jsonURL = sourceDir.appendingPathComponent("chat.json")
         guard FileManager.default.fileExists(atPath: jsonURL.path) else {
@@ -88,25 +101,28 @@ enum SingleFileExporter {
             throw AppError.exportFailed("聊天记录为空，无法生成网页导出")
         }
 
-        let safeName = sanitizeFilename(contactName.isEmpty ? "聊天记录" : contactName)
-        let stamp = Self.fileStamp()
+        let safeName = ExportNaming.sanitize(contactName)
+        let stamp = stamp ?? ExportNaming.stamp()
         let perPage = max(1, messagesPerPage)
         let chunks = stride(from: 0, to: rows.count, by: perPage).map {
             Array(rows[$0..<min($0 + perPage, rows.count)])
         }
 
+        // 本次导出该会话的专属文件夹，网页与媒体都落在里面
+        let exportDir = destinationDir.appendingPathComponent(
+            ExportNaming.folderName(contact: contactName, stamp: stamp), isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
+
         // 各卷共用一个媒体目录，避免同一个视频被拷贝多份
-        let mediaDirName = "\(safeName)_\(stamp)_media"
         let external = embedMedia
             ? ExternalMediaSink(
-                directory: destinationDir.appendingPathComponent(mediaDirName, isDirectory: true),
-                relativePrefix: mediaDirName
+                directory: exportDir.appendingPathComponent(ExportNaming.mediaDirName, isDirectory: true),
+                relativePrefix: ExportNaming.mediaDirName
               )
             : nil
 
-        try FileManager.default.createDirectory(at: destinationDir, withIntermediateDirectories: true)
-
-        let fileNames = (0..<chunks.count).map { pageFileName(safeName: safeName, stamp: stamp, index: $0, total: chunks.count) }
+        let fileNames = (0..<chunks.count).map { pageFileName(safeName: safeName, index: $0, total: chunks.count) }
         let title = escapeHTML(contactName.isEmpty ? "微信聊天记录" : contactName)
         let mediaBadge = embedMedia
             ? "<span class=\"pill pill-purple\">图片 · 语音已内嵌</span>"
@@ -189,7 +205,7 @@ enum SingleFileExporter {
             </html>
             """
 
-            let outURL = destinationDir.appendingPathComponent(fileNames[pageIndex])
+            let outURL = exportDir.appendingPathComponent(fileNames[pageIndex])
             try html.write(to: outURL, atomically: true, encoding: .utf8)
             written.append(outURL)
         }
@@ -197,12 +213,13 @@ enum SingleFileExporter {
         return written
     }
 
-    /// 单卷时保持原来的文件名不变；多卷时统一补零编号，保证文件管理器里按名称排序即是阅读顺序。
-    private static func pageFileName(safeName: String, stamp: String, index: Int, total: Int) -> String {
-        guard total > 1 else { return "\(safeName)_\(stamp).html" }
+    /// 文件夹名里已经带了时间戳，网页文件名就不再重复带；多卷时统一补零编号，
+    /// 保证文件管理器里按名称排序即是阅读顺序。
+    private static func pageFileName(safeName: String, index: Int, total: Int) -> String {
+        guard total > 1 else { return "\(safeName).html" }
         let width = String(total).count
         let number = String(format: "%0\(width)d", index + 1)
-        return "\(safeName)_\(stamp)_\(number).html"
+        return "\(safeName)_\(number).html"
     }
 
     private static func renderPageNav(fileNames: [String], current: Int) -> String {
@@ -224,7 +241,8 @@ enum SingleFileExporter {
     }
 
     /// 从 `stickers-manifest.json` 生成全部表情包画廊 HTML。
-    static func writeStickerGallery(from sourceDir: URL, into destinationDir: URL) throws -> URL? {
+    /// - Parameter stamp: 时间戳，传 nil 则取当前时间。同一批导出应传同一个值。
+    static func writeStickerGallery(from sourceDir: URL, into destinationDir: URL, stamp: String? = nil) throws -> URL? {
         let manifestURL = sourceDir.appendingPathComponent("stickers-manifest.json")
         guard FileManager.default.fileExists(atPath: manifestURL.path),
               let data = try? Data(contentsOf: manifestURL),
@@ -233,7 +251,7 @@ enum SingleFileExporter {
             return nil
         }
 
-        let stamp = fileStamp()
+        let stamp = stamp ?? ExportNaming.stamp()
         let outURL = destinationDir.appendingPathComponent("全部表情包_\(stamp).html")
         var body = ""
         for pack in manifest.packs {
@@ -1004,17 +1022,8 @@ enum SingleFileExporter {
         return f.string(from: date)
     }
 
-    private static func fileStamp() -> String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyyMMdd_HHmmss"
-        f.timeZone = TimeZone(identifier: "Asia/Shanghai")
-        return f.string(from: Date())
-    }
-
     private static func sanitizeFilename(_ name: String) -> String {
-        let invalid = CharacterSet(charactersIn: "/\\:?*\"<>|")
-        let cleaned = name.components(separatedBy: invalid).joined(separator: "_")
-        return cleaned.isEmpty ? "聊天记录" : cleaned
+        ExportNaming.sanitize(name)
     }
 
     private static func escapeHTML(_ s: String) -> String {
