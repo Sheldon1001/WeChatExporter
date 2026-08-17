@@ -13,6 +13,7 @@ All notable changes to this project are documented in this file.
 - **表情包目录补上时间戳**（macOS）：仅「网页导出」进了 `全部表情包_<时间戳>/`，其余三种模式仍写死 `全部表情包/`，第二次导出直接覆盖上一次
 - **文案与实际落盘对齐**：设置页「网页导出」的说明还写着「视频放在同名文件夹中外链」，实际早已是 `<联系人>_<时间戳>/media/视频/`；README 把「媒体按类型分子目录」说成四种模式通用，实际只有「分类导出」与「网页导出」如此，「全部导出」保持微信原始结构
   - 英文 README 补回自动检测数据目录、LLDB 取密钥两条，删掉与「四种导出方式」重复的一行
+- **DMG 打包不再随机失败**：`create_dmg.sh` 配置完 Finder 窗口就直接 `hdiutil detach`，Finder 还攥着卷时会报 `Resource busy` 并以 exit 16 中断 Release 构建。现在先关窗、再带 5 次重试卸载，最后兜底 `-force`
 
 ## [2.15.0] - 2026-08-17
 

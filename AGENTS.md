@@ -28,6 +28,8 @@
    - 触发后自动构建：macOS DMG + ZIP、Windows ZIP
    - 自动创建 GitHub Release 并上传资产
    - **必须验证 Actions 运行成功**：`gh run watch` 或查询 `gh run list --branch main` 确认三个 job（build-macos / build-windows / release）全部成功，且 Release 资产已出现
+   - **查 CI 必须带 `-R Sheldon1001/WeChatExporter`，或先 `gh repo set-default Sheldon1001/WeChatExporter`。** 本仓库有 origin 与 upstream 两个 remote，没设默认仓库时裸 `gh run list` 查的是 **upstream**，列出来的是一堆无关的旧 run，看着像「CI 没触发」——实测被这个误导过一次
+   - Release 失败但 `Publish GitHub Release` 这一步没跑到（`gh release view vX.Y.Z` 报 not found）时，说明该版本没有任何已发布产物，可以修完直接删标签重打同一个版本号：`git tag -d vX.Y.Z && git push origin :refs/tags/vX.Y.Z`，然后重新 tag、push。已经发布出去的版本号不要复用
 
 5. **通知用户**：告知新版本号、Release 链接、以及核心变更摘要
 

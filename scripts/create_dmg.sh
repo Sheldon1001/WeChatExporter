@@ -143,8 +143,33 @@ if command -v bless >/dev/null 2>&1; then
 fi
 
 sync
-sleep 1
-hdiutil detach "$DEVICE" >/dev/null
+
+# 上面那段 AppleScript 结尾又 open 了一次窗口来让 Finder 落盘 .DS_Store，于是 Finder 还攥着
+# 这个卷，直接 detach 会撞上 "couldn't eject - Resource busy"（exit 16）。CI 上踩到过一次：
+# 本地跑通、runner 上挂掉，因为无头环境里 Finder 放手的时机不一样。所以先请 Finder 关窗，
+# 再带重试地卸载，最后才兜底 -force——不要退回一句裸 detach。
+/usr/bin/osascript <<APPLESCRIPT 2>/dev/null || true
+tell application "Finder"
+  if exists disk "$VOL_NAME" then
+    close (every window whose name is "$VOL_NAME")
+  end if
+end tell
+APPLESCRIPT
+
+detached=0
+for attempt in 1 2 3 4 5; do
+  if hdiutil detach "$DEVICE" >/dev/null 2>&1; then
+    detached=1
+    break
+  fi
+  echo "卷仍被占用，${attempt}/5 次重试卸载…"
+  sleep 3
+done
+
+if [ "$detached" -ne 1 ]; then
+  echo "常规卸载均失败，改用强制卸载"
+  hdiutil detach "$DEVICE" -force >/dev/null
+fi
 
 OUT="$ROOT/$DMG_NAME"
 rm -f "$OUT"
