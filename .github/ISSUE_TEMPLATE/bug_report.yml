@@ -6,7 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        提交前请先查看 [README 常见问题](https://github.com/93857536-pixel/WeChatExporter#常见问题) 和 [CHANGELOG](https://github.com/93857536-pixel/WeChatExporter/blob/main/CHANGELOG.md)。
+        提交前请先查看 [README 常见问题](https://github.com/Sheldon1001/WeChatExporter#常见问题) 和 [CHANGELOG](https://github.com/Sheldon1001/WeChatExporter/blob/main/CHANGELOG.md)。
 
   - type: dropdown
     id: platform

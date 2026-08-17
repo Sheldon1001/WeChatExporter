@@ -161,7 +161,7 @@ codesign --force --deep --sign - /Applications/WeChatExporter.app
 
 **如何反馈问题**
 
-请使用 [Bug Report 模板](https://github.com/93857536-pixel/WeChatExporter/issues/new?template=bug_report.yml) 提交 Issue。
+请使用 [Bug Report 模板](https://github.com/Sheldon1001/WeChatExporter/issues/new?template=bug_report.yml) 提交 Issue。
 
 ## 参与贡献
 

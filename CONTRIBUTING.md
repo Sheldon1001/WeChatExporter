@@ -4,8 +4,8 @@
 
 ## 报告问题
 
-- Bug：请使用 [Bug Report](https://github.com/93857536-pixel/WeChatExporter/issues/new?template=bug_report.yml) 模板
-- 功能建议：请使用 [Feature Request](https://github.com/93857536-pixel/WeChatExporter/issues/new?template=feature_request.yml) 模板
+- Bug：请使用 [Bug Report](https://github.com/Sheldon1001/WeChatExporter/issues/new?template=bug_report.yml) 模板
+- 功能建议：请使用 [Feature Request](https://github.com/Sheldon1001/WeChatExporter/issues/new?template=feature_request.yml) 模板
 
 提交 Issue 时请附上：平台、系统版本、微信版本、应用版本、复现步骤和日志。
 

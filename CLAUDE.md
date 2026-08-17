@@ -156,4 +156,4 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 - 导出查询一律用 `contact.id`（wxid/username）而非 `displayName`，后者不唯一会导致导出错位
 - `.gitignore` 已封掉 `raw_key.bin`、`all_keys.json`、`**/decrypted/`、`*.db`——不要放行这些
 - 仓库为 `Sheldon1001/WeChatExporter`（`origin`），是 `93857536-pixel/WeChatExporter`（`upstream`）的 fork——**发布只推 origin**；仓库 About 信息由 `scripts/update_github_about.sh` 维护
-- 应用内「检查更新」与「Release 下载」都由 `UpdateService.repoOwner` / `repoName` 派生，换仓库只改这一处；「问题反馈」按钮仍指向 upstream（fork 的 Issues 未开启）
+- 应用内「检查更新」「Release 下载」「GitHub 仓库」「问题反馈」四处都由 `UpdateService.repoOwner` / `repoName` 派生，换仓库只改这一处

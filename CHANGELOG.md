@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.14.2] - 2026-08-17
+
+### Fixed
+- **「问题反馈」指向本仓库**：本仓库的 Issues 已开启，设置 → 关于里的反馈按钮不再跳到上游仓库；README、CONTRIBUTING 与 issue 模板里的链接一并更新
+  - 至此设置页四个入口（检查更新 / Release 下载 / GitHub 仓库 / 问题反馈）全部由 `UpdateService.repoOwner` 派生
+
 ## [2.14.1] - 2026-08-17
 
 ### Fixed
