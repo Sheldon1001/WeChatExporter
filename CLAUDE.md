@@ -61,7 +61,7 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 
 | | macOS | Windows |
 |---|---|---|
-| 二进制 | `vendor/macos/wx-cli`（pandorafuture/wx-cli 0.7.2，白名单扩到微信 4.1.7–4.1.11） | `vendor/windows/wx.exe`（沿用 v2.6.2 所带版本） |
+| 二进制 | `vendor/macos/wx-cli`（[Sheldon1001/wx-cli](https://github.com/Sheldon1001/wx-cli) 0.7.5，MIT，白名单扩到微信 4.1.7–4.1.11；来源与校验见 `vendor/README.md`） | `vendor/windows/wx.exe`（沿用 v2.6.2 所带版本） |
 | 子命令 | `doctor` / `status` / `key scan` / `key extract` / `decrypt` / `sessions --format json --limit --offset` / `export <id> --output --format` | `daemon status` / `init --force [--data-dir]` / `sessions --json -n` / `export …` |
 
 **两个二进制的命令行文法不同**，不能互相套用参数。CLI 定位顺序（macOS `WxCliService.locateExecutable`）：bundle 内 → `~/.local/bin` → `/opt/homebrew/bin` → `/usr/local/bin`。

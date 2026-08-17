@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.15.2] - 2026-08-17
+
+### Changed
+- **内置 wx-cli 升到 0.7.5，且首次做到可复现**（macOS）：此前打包的那份自报 `0.7.2 (b31a416)`，却包含 `b31a416` 里并不存在的版本白名单——它是在某人机器上用未提交的本地改动构建的（二进制里嵌着 `/Users/linminhao/`），无法从任何公开提交重建，也就无从核实它到底改了什么
+  - 白名单改动已提交到 [Sheldon1001/wx-cli](https://github.com/Sheldon1001/wx-cli)（MIT，fork 自 pandorafuture/wx-cli），发布为 v0.7.5 = 上游 v0.7.4 + 该改动
+  - 新二进制由 GitHub Actions 从 tag 构建（`/Users/runner/`），`vendor/README.md` 记下了 commit、SHA-256 与自行复现的办法
+  - 顺带修掉上游一处隐患：「版本不支持」的错误文案原本把版本号另抄了一遍，与白名单各自漂移；现在从白名单派生。并补了单元测试锁住白名单
+  - 相比 0.7.2 还带来上游 0.7.3 / 0.7.4 的改进，其中 `perf: eliminate repeated SQLCipher key derivation` 直接减少导出时重复的密钥派生
+  - 实测核对过兼容性：`sessions` / `export` 的命令行参数与 JSON 字段和 0.7.2 完全一致（仅新增 `avatar_url`），同一会话导出 300 条消息、21 个媒体文件的结果逐字段一致
+
 ## [2.15.1] - 2026-08-17
 
 ### Fixed
