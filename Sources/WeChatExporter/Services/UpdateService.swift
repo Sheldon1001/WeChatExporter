@@ -118,9 +118,19 @@ struct UpdatePreferences {
 final class UpdateService {
     static let shared = UpdateService()
 
-    private let repoOwner = "93857536-pixel"
-    private let repoName = "WeChatExporter"
-    private let apiURL = "https://api.github.com/repos/93857536-pixel/WeChatExporter/releases/latest"
+    /// 更新通道指向的仓库——即本项目发布 Release 的那个仓库。
+    /// 改这里一处即可，检查更新与「Release 下载」都从它派生。
+    static let repoOwner = "Sheldon1001"
+    static let repoName = "WeChatExporter"
+
+    /// Release 页面地址（手动下载入口）
+    static var releasePageURL: String {
+        "https://github.com/\(repoOwner)/\(repoName)/releases/latest"
+    }
+
+    private var apiURL: String {
+        "https://api.github.com/repos/\(Self.repoOwner)/\(Self.repoName)/releases/latest"
+    }
 
     /// 当前应用版本（从 Info.plist 读取）
     var currentVersion: String {

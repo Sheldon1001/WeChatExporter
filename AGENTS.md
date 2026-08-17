@@ -31,7 +31,7 @@
 
 ## 项目要点
 
-- 仓库：`93857536-pixel/WeChatExporter`（GitHub）
+- 仓库：`Sheldon1001/WeChatExporter`（GitHub，`origin`）——本仓库是 `93857536-pixel/WeChatExporter` 的 fork，后者是 `upstream`，**发布只推 origin，不要推 upstream**
 - 双平台：macOS（SwiftUI，`Sources/`）+ Windows（WPF，`windows/`）
 - 发布机制：推 `v*` tag 触发 GitHub Actions 自动打包上传 Releases，**无需手动上传资产**
 - 更新通道：应用内自动更新从 GitHub Releases 下载 `WeChatExporter-macOS-arm64.dmg`

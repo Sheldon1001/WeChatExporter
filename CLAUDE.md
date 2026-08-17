@@ -155,4 +155,5 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 - macOS 需要关闭 SIP；`WxCliService.tryAutoFixDevToolsSecurity` 会在 SIP 已关但 DevToolsSecurity 未启用时，用 `NSAppleScript` 弹系统授权框自动执行 `DevToolsSecurity -enable`（必须在主线程调用）
 - 导出查询一律用 `contact.id`（wxid/username）而非 `displayName`，后者不唯一会导致导出错位
 - `.gitignore` 已封掉 `raw_key.bin`、`all_keys.json`、`**/decrypted/`、`*.db`——不要放行这些
-- 仓库为 `93857536-pixel/WeChatExporter`；仓库 About 信息由 `scripts/update_github_about.sh` 维护
+- 仓库为 `Sheldon1001/WeChatExporter`（`origin`），是 `93857536-pixel/WeChatExporter`（`upstream`）的 fork——**发布只推 origin**；仓库 About 信息由 `scripts/update_github_about.sh` 维护
+- 应用内「检查更新」与「Release 下载」都由 `UpdateService.repoOwner` / `repoName` 派生，换仓库只改这一处；「问题反馈」按钮仍指向 upstream（fork 的 Issues 未开启）

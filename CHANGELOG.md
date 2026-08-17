@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.14.1] - 2026-08-17
+
+### Fixed
+- **更新通道指向本仓库**：应用内「检查更新」与「Release 下载」此前查询的是上游仓库 `93857536-pixel/WeChatExporter`，本仓库自行发布的版本永远检查不到。现在两处都由 `UpdateService.repoOwner` / `repoName` 派生，换仓库只改一处
+  - 设置页的「GitHub 仓库」按钮、README 徽章与下载链接、`install.sh` 提示、`scripts/update_github_about.sh` 默认仓库同步更新
+  - 「问题反馈」按钮仍指向上游仓库——本仓库的 Issues 未开启，且 issue 模板在上游
+
 ## [2.14.0] - 2026-08-17
 
 ### Added

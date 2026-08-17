@@ -746,7 +746,7 @@ final class AppViewModel: ObservableObject {
         if let info = availableUpdate {
             UpdateService.shared.openReleasePage(url: info.releaseURL)
         } else {
-            UpdateService.shared.openReleasePage(url: "https://github.com/93857536-pixel/WeChatExporter/releases/latest")
+            UpdateService.shared.openReleasePage(url: UpdateService.releasePageURL)
         }
     }
 

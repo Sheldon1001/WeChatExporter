@@ -1,6 +1,6 @@
 # WeChatExporter
 
-[![Release](https://img.shields.io/github/v/release/93857536-pixel/WeChatExporter?label=release)](https://github.com/93857536-pixel/WeChatExporter/releases/latest)
+[![Release](https://img.shields.io/github/v/release/Sheldon1001/WeChatExporter?label=release)](https://github.com/Sheldon1001/WeChatExporter/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Native desktop app to export **your own** WeChat chat history locally. No cloud upload, no key exfiltration.
@@ -9,7 +9,7 @@ Native desktop app to export **your own** WeChat chat history locally. No cloud 
 
 ## Download
 
-Get the latest build from **[GitHub Releases](https://github.com/93857536-pixel/WeChatExporter/releases/latest)**:
+Get the latest build from **[GitHub Releases](https://github.com/Sheldon1001/WeChatExporter/releases/latest)**:
 
 | Platform | File | Notes |
 |----------|------|-------|

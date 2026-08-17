@@ -1,6 +1,6 @@
 # WeChatExporter — Windows 版
 
-[![Release](https://img.shields.io/github/v/release/93857536-pixel/WeChatExporter?label=release)](https://github.com/93857536-pixel/WeChatExporter/releases/latest)
+[![Release](https://img.shields.io/github/v/release/Sheldon1001/WeChatExporter?label=release)](https://github.com/Sheldon1001/WeChatExporter/releases/latest)
 
 原生 Windows 桌面应用，用于导出 **微信 PC 版 4.x** 本地聊天记录。
 
@@ -30,7 +30,7 @@
 
 ### 方式一：下载 Release（推荐）
 
-前往 [GitHub Releases](https://github.com/93857536-pixel/WeChatExporter/releases)，下载 `WeChatExporter-Windows-x64.zip`，解压后运行 `WeChatExporter.exe`。
+前往 [GitHub Releases](https://github.com/Sheldon1001/WeChatExporter/releases)，下载 `WeChatExporter-Windows-x64.zip`，解压后运行 `WeChatExporter.exe`。
 
 ### 方式二：一键安装（从源码）
 

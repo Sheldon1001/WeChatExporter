@@ -2,11 +2,11 @@
 # 更新 GitHub 仓库 About 信息（需本机 gh 已登录且有 repo 管理权限）
 set -euo pipefail
 
-REPO="${1:-93857536-pixel/WeChatExporter}"
+REPO="${1:-Sheldon1001/WeChatExporter}"
 
 gh repo edit "$REPO" \
   --description "微信聊天记录导出 | macOS DMG + Windows | 本地运行 | Swift + WPF" \
-  --homepage "https://github.com/93857536-pixel/WeChatExporter/releases/latest"
+  --homepage "https://github.com/Sheldon1001/WeChatExporter/releases/latest"
 
 gh repo edit "$REPO" \
   --add-topic wechat \

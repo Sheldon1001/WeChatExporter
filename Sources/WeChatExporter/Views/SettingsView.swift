@@ -444,10 +444,11 @@ private struct AboutTab: View {
             // Links
             HStack(spacing: 20) {
                 LinkButton(title: "GitHub 仓库", icon: "star.fill") {
-                    if let url = URL(string: "https://github.com/93857536-pixel/WeChatExporter") {
+                    if let url = URL(string: "https://github.com/\(UpdateService.repoOwner)/\(UpdateService.repoName)") {
                         NSWorkspace.shared.open(url)
                     }
                 }
+                // 反馈仍指向上游仓库：本 fork 的 Issues 默认未开启，且 issue 模板在上游
                 LinkButton(title: "问题反馈", icon: "exclamationmark.bubble.fill") {
                     if let url = URL(string: "https://github.com/93857536-pixel/WeChatExporter/issues") {
                         NSWorkspace.shared.open(url)

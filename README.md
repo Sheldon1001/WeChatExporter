@@ -1,8 +1,8 @@
 # WeChatExporter
 
-[![Release](https://img.shields.io/github/v/release/93857536-pixel/WeChatExporter?label=release)](https://github.com/93857536-pixel/WeChatExporter/releases/latest)
+[![Release](https://img.shields.io/github/v/release/Sheldon1001/WeChatExporter?label=release)](https://github.com/Sheldon1001/WeChatExporter/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)](https://github.com/93857536-pixel/WeChatExporter)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)](https://github.com/Sheldon1001/WeChatExporter)
 
 原生应用，用于在本地导出**自己的**微信聊天记录。完全离线运行，不上传数据或密钥。
 
@@ -15,7 +15,7 @@
 
 ## 下载（推荐）
 
-前往 **[GitHub Releases](https://github.com/93857536-pixel/WeChatExporter/releases/latest)** 下载最新版：
+前往 **[GitHub Releases](https://github.com/Sheldon1001/WeChatExporter/releases/latest)** 下载最新版：
 
 | 平台 | 文件 | 说明 |
 |------|------|------|
@@ -94,7 +94,7 @@
 ### macOS
 
 ```bash
-git clone https://github.com/93857536-pixel/WeChatExporter.git
+git clone https://github.com/Sheldon1001/WeChatExporter.git
 cd WeChatExporter
 ./install.sh                  # 构建并安装到桌面与 /Applications
 # 或
