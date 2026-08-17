@@ -431,6 +431,11 @@ final class AppViewModel: ObservableObject {
         // 一次导出全程共用一个时间戳：每个会话各自落到 <联系人>_<时间戳>/ 里，
         // 同一批导出的文件夹在文件管理器里排在一起，重复导出也不会覆盖上一次的结果
         let runStamp = ExportNaming.stamp()
+        // 重名会话（两个「老王」、两个同名群）共用时间戳后会撞进同一个文件夹互相覆盖，
+        // 所以夹名统一先算一遍，撞名的那些自动带上 wxid 尾段
+        let folderNames = ExportNaming.uniqueFolderNames(
+            for: selected.map { (id: $0.id, displayName: $0.displayName) }, stamp: runStamp
+        )
         var summary: [String] = []
         do {
             try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
@@ -462,7 +467,7 @@ final class AppViewModel: ObservableObject {
                     )
 
                     // 每个会话的产物都进自己的文件夹，不再摊在导出根目录里
-                    let folderName = ExportNaming.folderName(contact: contact.displayName, stamp: runStamp)
+                    let folderName = folderNames[index]
                     let contactDir = base.appendingPathComponent(folderName, isDirectory: true)
 
                     switch mode {
@@ -492,7 +497,8 @@ final class AppViewModel: ObservableObject {
                             contactName: contact.displayName,
                             into: base,
                             embedMedia: true,
-                            stamp: runStamp
+                            stamp: runStamp,
+                            folderName: folderName
                         )
                         if pages.count > 1 {
                             summary.append("• \(contact.displayName)：\(count) 条 → \(folderName)/（\(pages.count) 个网页，从 \(pages[0].lastPathComponent) 开始）")
@@ -521,7 +527,9 @@ final class AppViewModel: ObservableObject {
                                 summary.append("• 全部表情包：\(stickerCount) 张 → \(folder)/\(first.lastPathComponent)\(suffix)")
                             }
                         } else {
-                            let stickersDir = base.appendingPathComponent("全部表情包", isDirectory: true)
+                            // 与会话一致：带时间戳各自成夹，否则第二次导出会把上一次的表情覆盖掉
+                            let stickerFolder = ExportNaming.folderName(contact: "全部表情包", stamp: runStamp)
+                            let stickersDir = base.appendingPathComponent(stickerFolder, isDirectory: true)
                             try? FileManager.default.createDirectory(at: stickersDir, withIntermediateDirectories: true)
                             if let files = try? FileManager.default.contentsOfDirectory(at: stickerTemp.appendingPathComponent("media/stickers"), includingPropertiesForKeys: nil) {
                                 for f in files {
@@ -532,7 +540,7 @@ final class AppViewModel: ObservableObject {
                                     try? FileManager.default.moveItem(at: f, to: dest)
                                 }
                             }
-                            summary.append("• 全部表情包：\(stickerCount) 张 → 全部表情包/")
+                            summary.append("• 全部表情包：\(stickerCount) 张 → \(stickerFolder)/")
                         }
                     }
                 }
@@ -540,7 +548,7 @@ final class AppViewModel: ObservableObject {
                 guard paths.isDecryptedHealthy else {
                     throw AppError.exportFailed("请先点击「准备数据」")
                 }
-                for contact in selected {
+                for (index, contact) in selected.enumerated() {
                     let tempDir = FileManager.default.temporaryDirectory
                         .appendingPathComponent("WeChatExporter-\(UUID().uuidString)", isDirectory: true)
                     defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -551,7 +559,7 @@ final class AppViewModel: ObservableObject {
                         decryptedDir: paths.decryptedDir,
                         outputDir: tempDir
                     )
-                    let folderName = ExportNaming.folderName(contact: contact.displayName, stamp: runStamp)
+                    let folderName = folderNames[index]
                     let contactDir = base.appendingPathComponent(folderName, isDirectory: true)
                     try FileManager.default.createDirectory(at: contactDir, withIntermediateDirectories: true)
                     try copyTextArtifacts(from: tempDir, to: contactDir)

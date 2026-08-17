@@ -30,11 +30,12 @@ Get the latest build from **[GitHub Releases](https://github.com/Sheldon1001/WeC
   - **Text only**: txt / json / csv, fastest
   - **Everything**: text plus the raw media files
   - **Web page**: a self-contained `.html` with images, stickers and voice inlined; video and large attachments are linked from a `media/` folder. Split into volumes of 1000 messages with prev/next navigation
-- Every export gets its own folder, `<contact>_<timestamp>/`, so repeated exports never overwrite each other; media is filed into 图片 / 视频 / 语音 / 其他 subfolders
+- Every export gets its own folder, `<contact>_<timestamp>/`, so repeated exports never overwrite each other — same-named chats in one batch are kept apart too. **By category** and **Web page** file media into 图片 / 视频 / 语音 / 其他 subfolders; **Everything** keeps WeChat's original layout
 - Playable voice messages (macOS): bundled ffmpeg transcodes WeChat's SILK to MP3
 - Animated WXGF stickers exported as animated GIF (macOS)
 - Live export progress: current chat, stage and media count
-- Export TXT / CSV / JSON
+- Automatic WeChat data directory detection
+- Key capture via LLDB / memory scan, then SQLCipher decryption (WeChat 4.x)
 
 ## Requirements
 

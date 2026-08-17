@@ -30,4 +30,42 @@ enum ExportNaming {
     static func folderName(contact: String, stamp: String) -> String {
         "\(sanitize(contact))_\(stamp)"
     }
+
+    /// 为一批会话算出互不冲突的文件夹名，顺序与入参一致。
+    ///
+    /// 同批导出共用一个时间戳，所以光靠 `<联系人>_<时间戳>` 不足以区分重名会话——微信里
+    /// 重名昵称与同名群都很常见，两个「老王」会写进同一个文件夹，后一个把前一个的
+    /// chat.json 覆盖掉。这里只在真的撞名时才追加 wxid 尾段，常见情况下夹名保持干净。
+    static func uniqueFolderNames(for contacts: [(id: String, displayName: String)], stamp: String) -> [String] {
+        var nameCounts: [String: Int] = [:]
+        for c in contacts { nameCounts[sanitize(c.displayName), default: 0] += 1 }
+
+        var used = Set<String>()
+        var names: [String] = []
+        names.reserveCapacity(contacts.count)
+        for c in contacts {
+            let safe = sanitize(c.displayName)
+            var candidate = nameCounts[safe, default: 0] > 1
+                ? "\(safe)_\(shortID(c.id))_\(stamp)"
+                : "\(safe)_\(stamp)"
+            // wxid 尾段也可能撞（同一个会话被选中两次之类），再兜一层序号
+            if used.contains(candidate) {
+                var n = 2
+                while used.contains("\(candidate)_\(n)") { n += 1 }
+                candidate = "\(candidate)_\(n)"
+            }
+            used.insert(candidate)
+            names.append(candidate)
+        }
+        return names
+    }
+
+    /// 用来区分同名会话的 wxid 尾段。`12345678@chatroom` 这类先去掉 `@` 后缀再取尾部。
+    private static func shortID(_ id: String) -> String {
+        let base = id.components(separatedBy: "@").first ?? id
+        let invalid = CharacterSet(charactersIn: "/\\:?*\"<>|")
+        let cleaned = base.components(separatedBy: invalid).joined(separator: "_")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? "id" : String(cleaned.suffix(6))
+    }
 }

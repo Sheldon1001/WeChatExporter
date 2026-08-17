@@ -108,7 +108,9 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 
 微信本地并不保存所有媒体：实测一个群里 308 个视频、9 条语音在本机根本没有文件（wx-cli 报 `video(s) skipped — not found after hardlink + directory scan`），2927 张图只有缩略图。此时 wx-cli 的 snippet 会退化成 `[video <md5>]` 这种「类型 + 内容哈希」。`SingleFileExporter.cleanContent` 负责把它规整成 `[视频]`，`missingMediaNote` 再把它换成说明为什么没有、以及怎么补救的文案——不要让用户对着一串十六进制猜。
 
-**落盘形态由 `ExportNaming` 统一**：四种模式一律把单个会话写进 `<导出目录>/<联系人>_<时间戳>/`，时间戳由 `exportSelected` 开头算一次（`runStamp`）后全程复用，所以同一批导出的文件夹在 Finder 里挨在一起，重复导出也不会覆盖上一次。早先网页导出是把多卷 HTML 和 `<名称>_<时间戳>_media/` 直接摊在导出根目录里，导几个会话后根目录就分不清谁是谁——不要改回去。文件夹名已带时间戳，所以里面的网页文件名不再重复带（`张三_1.html`、`张三_2.html`，单卷时就是 `张三.html`）。
+**落盘形态由 `ExportNaming` 统一**：四种模式一律把单个会话写进 `<导出目录>/<联系人>_<时间戳>/`，时间戳由 `exportSelected` 开头算一次（`runStamp`）后全程复用，所以同一批导出的文件夹在 Finder 里挨在一起，重复导出也不会覆盖上一次。早先网页导出是把多卷 HTML 和 `<名称>_<时间戳>_media/` 直接摊在导出根目录里，导几个会话后根目录就分不清谁是谁——不要改回去。文件夹名已带时间戳，所以里面的网页文件名不再重复带（`张三_1.html`、`张三_2.html`，单卷时就是 `张三.html`）。表情包画廊同理走 `全部表情包_<时间戳>/`，四种模式都要带这个时间戳。
+
+**夹名一律走 `ExportNaming.uniqueFolderNames` 批量算，别在循环里逐个拼 `folderName(contact:stamp:)`。** 共用 `runStamp` 有个副作用：重名会话（微信里两个「老王」、两个同名群很常见）会拼出完全相同的夹名，写进同一个文件夹后 `copyTextArtifacts` 先 remove 再 copy，前一个的 chat.json 被后一个覆盖——共用时间戳把原先的概率碰撞变成了必然。`uniqueFolderNames` 先数一遍重名，只给真的撞名的那些追加 wxid 尾段，常见情况下夹名保持干净。`SingleFileExporter.writeHTML` 因此要用调用方传进来的 `folderName`，不能自己再拼一次，否则和 `AppViewModel` 算的对不上。
 
 `ExportMode`（持久化在 UserDefaults `export.mode`）：
 - `categorized`（默认）→ `MediaOrganizer.organize` 归档到 `<联系人>_<时间戳>/{文字,图片,视频,语音,其他}/`
@@ -118,9 +120,11 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 
 新增 case 时注意 `includesMedia` 必须返回 `true`，否则 wx-cli 被加 `--no-media`，拿不到任何媒体。
 
-`SingleFileExporter.embedMedia` **纯按文件扩展名分派**，与 msg_type 无关——语音只要是 `.mp3` 就渲染成 `<audio>`。视频与 >8 MB 的文件不做 base64，改由 `ExternalMediaSink` 拷进会话文件夹的 `media/<类型>/` 后相对路径外链（base64 会让含视频的 HTML 涨到 GB 级）。**分类表只有 `MediaOrganizer.category(forExtension:)` 这一份**，分类导出与网页导出共用，别再各写一份扩展名列表。`renderOrphanMedia` 兜底渲染没被任何消息引用的媒体，但它们会堆在最后一卷末尾而非按时间内联。
+`SingleFileExporter.embedMedia` **纯按文件扩展名分派**，与 msg_type 无关——语音只要是 `.mp3` 就渲染成 `<audio>`。视频与 >8 MB 的文件不做 base64，改由 `ExternalMediaSink` 拷进会话文件夹的 `media/<类型>/` 后相对路径外链（base64 会让含视频的 HTML 涨到 GB 级）。**分类表只有 `MediaOrganizer.category(forExtension:)` 这一份**，分类导出与网页导出共用，别再各写一份扩展名列表——`SingleFileExporter` 私藏过一份 `videoExts`，漏了 `flv`/`wmv`，于是同一个文件被渲染成附件链接、却又被 `store()` 归进 `media/视频/`。`renderOrphanMedia` 兜底渲染没被任何消息引用的媒体，但它们会堆在最后一卷末尾而非按时间内联。
 
 `writeHTML` 超过 `defaultMessagesPerPage`（1000 条）会自动分卷，返回 `[URL]` 而非单个 URL。分卷时各卷**共用同一个媒体目录**（避免视频被拷多份），但**每卷各自做媒体去重**——同一张图被两卷的消息引用时两卷都要显示，否则读者在第 3 卷会看到无图的消息。单卷时文件名保持不带编号，与旧行为一致。
+
+这两层去重是**两件事，缺一不可**：每卷的 `embedded` 集合管的是「这一卷要不要再渲染一次」，`ExternalMediaSink.storedHrefs` 管的是「这个源文件要不要再拷一份」。早先只有前者，于是跨卷引用的视频第二次走到 `store()` 时撞名改成 `clip_2.mp4` 又拷了一遍，第 2 卷的 `<video>` 指向副本——「共用媒体目录」成了空话。改 `store()` 时别把按源路径的那层缓存去掉。
 
 **两端分叉**：Windows 的 `SingleFileExporter.cs` 一直是主路径且只出 HTML；macOS 这边 HTML 只是四选一里的一种。两边的 HTML 结构和样式并不一致，改一侧不会自动同步到另一侧。
 

@@ -8,7 +8,7 @@ enum ExportMode: String, CaseIterable, Identifiable {
     case textOnly = "textOnly"
     /// 导出全部文字与原始媒体文件，保持文件夹结构
     case all = "all"
-    /// 生成可用浏览器打开的 HTML，图片 / 表情 / 语音内嵌，视频外链
+    /// 生成可用浏览器打开的 HTML，图片 / 表情 / 语音内嵌，视频与大附件外链到 media/<类型>/
     case singleFileHTML = "singleFileHTML"
 
     var id: String { rawValue }
@@ -27,7 +27,7 @@ enum ExportMode: String, CaseIterable, Identifiable {
         case .categorized: return "文字、图片、视频、语音分别归档到独立文件夹"
         case .textOnly: return "仅导出聊天文字（txt / json / csv）"
         case .all: return "导出全部文字与原始媒体文件，保持文件夹结构"
-        case .singleFileHTML: return "生成 HTML 网页，图片、表情、语音内嵌，视频放在同名文件夹中外链"
+        case .singleFileHTML: return "生成 HTML 网页，图片、表情、语音内嵌，视频与大附件放进 media/ 外链"
         }
     }
 

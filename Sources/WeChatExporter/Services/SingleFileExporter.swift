@@ -27,6 +27,10 @@ enum SingleFileExporter {
         let relativePrefix: String
         private var createdSubdirs = Set<String>()
         private var assignedNames = Set<String>()
+        /// 已落盘的源文件路径 → 相对 href。分卷时每卷各自做引用去重，同一个视频被两卷引用
+        /// 就会两次走到这里；不按源路径记一笔的话第二次会撞名改成 `x_2.mp4` 再拷一份，
+        /// 「各卷共用同一个媒体目录」也就成了空话。表情画廊跨页分组时同理。
+        private var storedHrefs: [String: String] = [:]
 
         init(directory: URL, relativePrefix: String) {
             self.directory = directory
@@ -34,7 +38,11 @@ enum SingleFileExporter {
         }
 
         /// 把文件拷进外链目录，返回可直接写进 HTML `src` 的相对路径；失败返回 nil。
+        /// 同一个源文件重复调用只拷一次，后续调用直接拿回首次的相对路径。
         func store(_ fileURL: URL) -> String? {
+            let sourceKey = fileURL.standardizedFileURL.path
+            if let existing = storedHrefs[sourceKey] { return existing }
+
             let fm = FileManager.default
             // 文字类不会走到外链（HTML 只外链媒体与大附件），归到「其他」
             let category = MediaOrganizer.category(forExtension: fileURL.pathExtension)
@@ -67,7 +75,9 @@ enum SingleFileExporter {
             }
             guard (try? fm.copyItem(at: fileURL, to: dest)) != nil else { return nil }
             assignedNames.insert(name)
-            return "\(urlEncodePathComponent(relativePrefix))/\(urlEncodePathComponent(subdirName))/\(urlEncodePathComponent(name))"
+            let href = "\(urlEncodePathComponent(relativePrefix))/\(urlEncodePathComponent(subdirName))/\(urlEncodePathComponent(name))"
+            storedHrefs[sourceKey] = href
+            return href
         }
     }
 
@@ -82,6 +92,8 @@ enum SingleFileExporter {
     /// 同一个媒体目录，页眉带上下页导航。
     /// - Parameter embedMedia: 为 true 时将媒体以 base64 内嵌到 HTML；为 false 时仅生成纯文字版本。
     /// - Parameter stamp: 时间戳，传 nil 则取当前时间。同一批导出应传同一个值。
+    /// - Parameter folderName: 会话文件夹名，传 nil 则按 `<联系人>_<时间戳>` 拼。同一批导出里
+    ///   有重名会话时，由调用方传入 `ExportNaming.uniqueFolderNames` 去重后的名字。
     @discardableResult
     static func writeHTML(
         from sourceDir: URL,
@@ -89,7 +101,8 @@ enum SingleFileExporter {
         into destinationDir: URL,
         embedMedia: Bool = false,
         messagesPerPage: Int = defaultMessagesPerPage,
-        stamp: String? = nil
+        stamp: String? = nil,
+        folderName: String? = nil
     ) throws -> [URL] {
         let jsonURL = sourceDir.appendingPathComponent("chat.json")
         guard FileManager.default.fileExists(atPath: jsonURL.path) else {
@@ -110,7 +123,7 @@ enum SingleFileExporter {
 
         // 本次导出该会话的专属文件夹，网页与媒体都落在里面
         let exportDir = destinationDir.appendingPathComponent(
-            ExportNaming.folderName(contact: contactName, stamp: stamp), isDirectory: true
+            folderName ?? ExportNaming.folderName(contact: contactName, stamp: stamp), isDirectory: true
         )
         try FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
 
@@ -910,8 +923,10 @@ enum SingleFileExporter {
             }
         }
 
-        // 视频一律外链：base64 会让 HTML 膨胀到浏览器打不开
-        if videoExts.contains(ext) {
+        // 视频一律外链：base64 会让 HTML 膨胀到浏览器打不开。
+        // 分类判定共用 MediaOrganizer.category，另写一份扩展名表迟早会分叉——早先这里漏了
+        // flv / wmv，于是同一个文件被渲染成附件链接、却又被 store() 归进 media/视频/。
+        if MediaOrganizer.category(forExtension: ext) == .video {
             if let href = external?.store(fileURL) {
                 return "<video controls preload=\"metadata\" src=\"\(href)\"></video>"
             }
@@ -973,8 +988,6 @@ enum SingleFileExporter {
             return "<p class=\"text\">[附件 \(escapeHTML(fileURL.lastPathComponent))，大小 \(formatBytes(fileSize))]</p>"
         }
     }
-
-    private static let videoExts: Set<String> = ["mp4", "mov", "m4v", "avi", "mkv", "webm", "3gp"]
 
     private static func attachmentLink(href: String, name: String, size: Int) -> String {
         "<a class=\"attach\" href=\"\(href)\" target=\"_blank\" rel=\"noopener noreferrer\">"
