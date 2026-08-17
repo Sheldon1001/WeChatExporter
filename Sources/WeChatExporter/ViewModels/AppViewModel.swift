@@ -510,9 +510,15 @@ final class AppViewModel: ObservableObject {
                     let stickerCount = await StickerPackExporter.exportAllPacks(in: stickerTemp, log: logHandler())
                     if stickerCount > 0 {
                         if mode == .singleFileHTML {
-                            // 网页导出下表情包也出一张画廊网页，与聊天记录的形态保持一致
-                            if let galleryURL = try? SingleFileExporter.writeStickerGallery(from: stickerTemp, into: base, stamp: runStamp) {
-                                summary.append("• 全部表情包：\(stickerCount) 张 → \(galleryURL.lastPathComponent)")
+                            // 网页导出下表情包也出画廊网页，与聊天记录的形态保持一致：
+                            // 自己的文件夹、表情外链、超量分页
+                            let pages = (try? SingleFileExporter.writeStickerGallery(
+                                from: stickerTemp, into: base, stamp: runStamp
+                            )) ?? []
+                            if let first = pages.first {
+                                let folder = first.deletingLastPathComponent().lastPathComponent
+                                let suffix = pages.count > 1 ? "（\(pages.count) 页）" : ""
+                                summary.append("• 全部表情包：\(stickerCount) 张 → \(folder)/\(first.lastPathComponent)\(suffix)")
                             }
                         } else {
                             let stickersDir = base.appendingPathComponent("全部表情包", isDirectory: true)

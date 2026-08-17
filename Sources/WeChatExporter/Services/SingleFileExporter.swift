@@ -1,7 +1,7 @@
 import Foundation
 
 /// 将导出目录中的聊天记录与媒体渲染成 HTML：图片、表情、语音以 base64 内嵌，
-/// 视频与大附件拷到 HTML 同级的 `<名称>_media/` 目录后用相对路径外链。
+/// 视频与大附件拷进同一个会话文件夹的 `media/<类型>/` 后用相对路径外链。
 ///
 /// 视频不内嵌是刻意的：微信视频动辄几百 MB，base64 还要再膨胀约 33%，
 /// 内嵌会生成 GB 级 HTML 把浏览器拖死。
@@ -240,92 +240,147 @@ enum SingleFileExporter {
         return "    <nav class=\"pager\">\(links)</nav>"
     }
 
-    /// 从 `stickers-manifest.json` 生成全部表情包画廊 HTML。
+    /// 单个画廊页面最多容纳的表情数。表情动辄上千张，全塞一页浏览器要滚很久。
+    static let defaultStickersPerPage = 500
+
+    /// 从 `stickers-manifest.json` 生成全部表情包画廊，返回全部页面的 URL（按顺序，首页在前）。
+    ///
+    /// 产物落在 `destinationDir/全部表情包_<时间戳>/` 里，表情**外链**到同目录的 `media/图片/`。
+    /// 早先是把每张表情 base64 内嵌进同一个 HTML，实测一份真实数据生成了 427 MB 的单文件，
+    /// 浏览器打开就卡死——不要改回内嵌。
     /// - Parameter stamp: 时间戳，传 nil 则取当前时间。同一批导出应传同一个值。
-    static func writeStickerGallery(from sourceDir: URL, into destinationDir: URL, stamp: String? = nil) throws -> URL? {
+    @discardableResult
+    static func writeStickerGallery(
+        from sourceDir: URL,
+        into destinationDir: URL,
+        stamp: String? = nil,
+        stickersPerPage: Int = defaultStickersPerPage
+    ) throws -> [URL] {
         let manifestURL = sourceDir.appendingPathComponent("stickers-manifest.json")
         guard FileManager.default.fileExists(atPath: manifestURL.path),
               let data = try? Data(contentsOf: manifestURL),
               let manifest = try? JSONDecoder().decode(StickerPackExporter.Manifest.self, from: data),
               !manifest.packs.isEmpty else {
-            return nil
+            return []
         }
 
         let stamp = stamp ?? ExportNaming.stamp()
-        let outURL = destinationDir.appendingPathComponent("全部表情包_\(stamp).html")
-        var body = ""
-        for pack in manifest.packs {
-            body += renderStickerPack(pack, sourceDir: sourceDir)
+        let galleryName = "全部表情包"
+        let exportDir = destinationDir.appendingPathComponent("\(galleryName)_\(stamp)", isDirectory: true)
+        try FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
+
+        let external = ExternalMediaSink(
+            directory: exportDir.appendingPathComponent(ExportNaming.mediaDirName, isDirectory: true),
+            relativePrefix: ExportNaming.mediaDirName
+        )
+
+        // 摊平成 (分组名, 表情) 再按数量切页：分组大小差异很大，按分组切会切出一页 3 张、
+        // 下一页 900 张的结果。切完再把同一分组的连续条目合回一个 section。
+        let flat = manifest.packs.flatMap { pack in pack.stickers.map { (pack.name, $0) } }
+        let perPage = max(1, stickersPerPage)
+        let chunks = stride(from: 0, to: flat.count, by: perPage).map {
+            Array(flat[$0..<min($0 + perPage, flat.count)])
         }
+        let fileNames = (0..<chunks.count).map { pageFileName(safeName: galleryName, index: $0, total: chunks.count) }
 
-        let html = """
-        <!DOCTYPE html>
-        <html lang="zh-CN">
-        <head>
-          <meta charset="utf-8"/>
-          <meta name="viewport" content="width=device-width, initial-scale=1"/>
-          <title>全部表情包</title>
-          <style>
-            \(exportStyles)
-            \(galleryStyles)
-          </style>
-        </head>
-        <body>
-          <div class="bg-scene" aria-hidden="true">
-            <div class="aurora aurora-a"></div>
-            <div class="aurora aurora-b"></div>
-            <div class="aurora aurora-c"></div>
-            <div class="grid-floor"></div>
-          </div>
-          <header>
-            <div class="header-glow"></div>
-            <p class="eyebrow">WeChatExporter · 表情包库</p>
-            <h1>全部表情包</h1>
-            <div class="stats">
-              <span class="pill pill-cyan">\(manifest.totalCount) 张表情</span>
-              <span class="pill pill-purple">\(manifest.packs.count) 个分组</span>
-              <span class="pill pill-muted">\(stamp)</span>
-            </div>
-          </header>
-          <main>
-        \(body)
-          </main>
-          <footer>
-            <span class="footer-brand">WeChatExporter</span>
-            <span class="footer-dot">·</span>
-            <span>收藏与商店表情包 · 浏览器离线可阅</span>
-          </footer>
-        </body>
-        </html>
-        """
+        var written: [URL] = []
+        for (pageIndex, chunk) in chunks.enumerated() {
+            var body = ""
+            var currentPack: String?
+            var tiles = ""
+            var tileCount = 0
 
-        try FileManager.default.createDirectory(at: destinationDir, withIntermediateDirectories: true)
-        try html.write(to: outURL, atomically: true, encoding: .utf8)
-        return outURL
-    }
+            func flushSection() {
+                guard let name = currentPack, !tiles.isEmpty else { tiles = ""; tileCount = 0; return }
+                body += """
+                    <section class="sticker-pack">
+                      <h2>\(escapeHTML(name)) <span class="pack-count">\(tileCount)</span></h2>
+                      <div class="sticker-grid">\(tiles)</div>
+                    </section>
 
-    private static func renderStickerPack(_ pack: StickerPackExporter.StickerPack, sourceDir: URL) -> String {
-        var tiles = ""
-        for sticker in pack.stickers {
-            // 表情包全是小图，不需要外链目录
-            guard let block = embedMedia(relativePath: sticker.path, sourceDir: sourceDir, external: nil) else { continue }
-            let caption = escapeHTML(sticker.caption)
-            tiles += """
-                <figure class="sticker-tile">
-                  \(block)
-                  \(caption.isEmpty ? "" : "<figcaption>\(caption)</figcaption>")
-                </figure>
+                """
+                tiles = ""
+                tileCount = 0
+            }
 
+            for (packName, sticker) in chunk {
+                if packName != currentPack {
+                    flushSection()
+                    currentPack = packName
+                }
+                guard let block = embedMedia(
+                    relativePath: sticker.path, sourceDir: sourceDir,
+                    external: external, preferExternal: true
+                ) else { continue }
+                let caption = escapeHTML(sticker.caption)
+                tiles += """
+                    <figure class="sticker-tile">
+                      \(block)
+                      \(caption.isEmpty ? "" : "<figcaption>\(caption)</figcaption>")
+                    </figure>
+
+                """
+                tileCount += 1
+            }
+            flushSection()
+
+            let nav = chunks.count > 1 ? renderPageNav(fileNames: fileNames, current: pageIndex) : ""
+            let firstIndex = pageIndex * perPage + 1
+            let lastIndex = firstIndex + chunk.count - 1
+            let rangeBadge = chunks.count > 1
+                ? "<span class=\"pill pill-cyan\">第 \(pageIndex + 1) / \(chunks.count) 页 · 第 \(firstIndex)–\(lastIndex) 张</span>"
+                : "<span class=\"pill pill-cyan\">\(manifest.totalCount) 张表情</span>"
+
+            let html = """
+            <!DOCTYPE html>
+            <html lang="zh-CN">
+            <head>
+              <meta charset="utf-8"/>
+              <meta name="viewport" content="width=device-width, initial-scale=1"/>
+              <title>全部表情包\(chunks.count > 1 ? "（\(pageIndex + 1)/\(chunks.count)）" : "")</title>
+              <style>
+                \(exportStyles)
+                \(galleryStyles)
+              </style>
+            </head>
+            <body>
+              <div class="bg-scene" aria-hidden="true">
+                <div class="aurora aurora-a"></div>
+                <div class="aurora aurora-b"></div>
+                <div class="aurora aurora-c"></div>
+                <div class="grid-floor"></div>
+              </div>
+              <header>
+                <div class="header-glow"></div>
+                <p class="eyebrow">WeChatExporter · 表情包库</p>
+                <h1>全部表情包</h1>
+                <div class="stats">
+                  \(rangeBadge)
+                  \(chunks.count > 1 ? "<span class=\"pill pill-muted\">共 \(manifest.totalCount) 张</span>" : "")
+                  <span class="pill pill-purple">\(manifest.packs.count) 个分组</span>
+                  <span class="pill pill-muted">\(stamp)</span>
+                </div>
+            \(nav)
+              </header>
+              <main>
+            \(body)
+              </main>
+            \(nav.isEmpty ? "" : "  <div class=\"nav-bottom\">\n\(nav)\n  </div>")
+              <footer>
+                <span class="footer-brand">WeChatExporter</span>
+                <span class="footer-dot">·</span>
+                <span>收藏与商店表情包 · 浏览器离线可阅</span>
+              </footer>
+            </body>
+            </html>
             """
-        }
-        guard !tiles.isEmpty else { return "" }
-        return """
-            <section class="sticker-pack">
-              <h2>\(escapeHTML(pack.name)) <span class="pack-count">\(pack.stickers.count)</span></h2>
-              <div class="sticker-grid">\(tiles)</div>
-            </section>
 
-        """
+            let outURL = exportDir.appendingPathComponent(fileNames[pageIndex])
+            try html.write(to: outURL, atomically: true, encoding: .utf8)
+            written.append(outURL)
+        }
+
+        return written
     }
 
     private static let galleryStyles = """
@@ -826,10 +881,13 @@ enum SingleFileExporter {
     /// 按扩展名分派渲染。注意这里**只看文件扩展名**，与消息类型无关——
     /// 所以语音只要被 wx-cli 转成了 .mp3 就会渲染成可播放的 `<audio>`。
     /// - Parameter external: 视频与大附件的外链落点；为 nil 时这类文件退化成文字占位。
+    /// - Parameter preferExternal: 图片也一律外链。表情包画廊用它——几千张表情 base64 内嵌
+    ///   会生成几百 MB 的 HTML（实测一份真实数据是 427 MB），浏览器根本打不开。
     private static func embedMedia(
         relativePath: String,
         sourceDir: URL,
-        external: ExternalMediaSink?
+        external: ExternalMediaSink?,
+        preferExternal: Bool = false
     ) -> String? {
         let rel = relativePath.hasPrefix("media/") ? relativePath : "media/\(relativePath)"
         let fileURL = sourceDir.appendingPathComponent(rel)
@@ -838,7 +896,7 @@ enum SingleFileExporter {
         let ext = fileURL.pathExtension.lowercased()
         if ext == "wxgf", let transcoded = WXGFTranscoder.transcodeIfNeeded(at: fileURL) {
             let decodedRel = (rel as NSString).deletingPathExtension + "." + transcoded.pathExtension
-            return embedMedia(relativePath: decodedRel, sourceDir: sourceDir, external: external)
+            return embedMedia(relativePath: decodedRel, sourceDir: sourceDir, external: external, preferExternal: preferExternal)
         }
 
         if ext == "dat" || ext == "wxgf" {
@@ -847,7 +905,7 @@ enum SingleFileExporter {
                 let decoded = base.appendingPathExtension(alt)
                 if FileManager.default.fileExists(atPath: decoded.path) {
                     let decodedRel = (rel as NSString).deletingPathExtension + ".\(alt)"
-                    return embedMedia(relativePath: decodedRel, sourceDir: sourceDir, external: external)
+                    return embedMedia(relativePath: decodedRel, sourceDir: sourceDir, external: external, preferExternal: preferExternal)
                 }
             }
         }
@@ -858,6 +916,13 @@ enum SingleFileExporter {
                 return "<video controls preload=\"metadata\" src=\"\(href)\"></video>"
             }
             return "<p class=\"text\">[视频 \(escapeHTML(fileURL.lastPathComponent))]</p>"
+        }
+
+        // 要求外链的场景里，图片也拷成文件走相对路径
+        if preferExternal,
+           MediaOrganizer.category(forExtension: ext) == .image,
+           let href = external?.store(fileURL) {
+            return "<img alt=\"表情\" class=\"chat-img\" loading=\"lazy\" src=\"\(href)\"/>"
         }
 
         let fileSize = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int) ?? 0

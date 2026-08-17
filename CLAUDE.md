@@ -114,7 +114,7 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 - `categorized`（默认）→ `MediaOrganizer.organize` 归档到 `<联系人>_<时间戳>/{文字,图片,视频,语音,其他}/`
 - `textOnly` → 只拷 txt/json/csv，且 `includesMedia == false`（wx-cli 加 `--no-media`）
 - `all` → 原样递归拷贝全部文件
-- `singleFileHTML` → `SingleFileExporter.writeHTML`，表情包另出一张 `writeStickerGallery` 画廊（单个文件，放在导出根目录）
+- `singleFileHTML` → `SingleFileExporter.writeHTML`，表情包另走 `writeStickerGallery` 出画廊，落在 `全部表情包_<时间戳>/`
 
 新增 case 时注意 `includesMedia` 必须返回 `true`，否则 wx-cli 被加 `--no-media`，拿不到任何媒体。
 
