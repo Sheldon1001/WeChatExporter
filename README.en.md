@@ -41,7 +41,7 @@ Get the latest build from **[GitHub Releases](https://github.com/Sheldon1001/WeC
 
 ### macOS
 - macOS 13+, Apple Silicon (arm64)
-- WeChat Mac 4.x, logged in
+- WeChat Mac 4.x, logged in — key extraction is verified on 4.1.7 through 4.1.11
 - SIP disabled for key capture
 
 ### Windows
@@ -85,8 +85,12 @@ Release packages bundle prebuilt binaries whose licences are independent of this
 
 | Component | Purpose | Licence |
 |---|---|---|
-| `wx-cli` (macOS) / `wx.exe` (Windows) | WeChat database decryption and export | see [vendor/README.md](vendor/README.md) |
+| `wx-cli` (macOS) | WeChat database decryption and export | **MIT** — source at [Sheldon1001/wx-cli](https://github.com/Sheldon1001/wx-cli) |
+| `wx.exe` (Windows) | same | see [vendor/README.md](vendor/README.md) |
 | `ffmpeg` / `ffprobe` (macOS) | SILK → MP3 voice, WXGF sticker decoding | **LGPL v2.1** |
+
+The macOS `wx-cli` is built by GitHub Actions from a public tag; `vendor/README.md` records the
+commit, the SHA-256 and how to reproduce it yourself.
 
 ffmpeg is a minimal static build (FFmpeg 8.0.1 + LAME 3.100) configured **without GPL**, invoked as a
 separate subprocess and never linked in. Rebuild or relink it (LGPL v2.1 §6) with

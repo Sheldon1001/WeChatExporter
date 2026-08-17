@@ -44,10 +44,17 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 2. **`./build_app.sh` 后打开 `.app`**——凡是涉及 `Bundle.main`、网络、进程环境的，**只能这样验**。
 3. **`screencapture` + `osascript` 点击**——验证 UI 行为（分组、折叠、全选）。窗口坐标用 `System Events` 取 `position of window 1`。注意先 `activate` 再点，否则点击会落到别的窗口。
 
-两个反复踩到的陷阱：
+三个反复踩到的陷阱，共同点是**验证手段本身会骗你**：
 
 - `swift run` 跑出来的是裸可执行文件，没有 app bundle，拿不到 `Bundle.main.resourceURL` 里的 wx-cli（会退回 native backend），版本号也读成 `0.0.0`。
 - **裸命令行程序不受 ATS 管辖**。同一段下载代码，命令行全过、`.app` 里全挂（`URLError -1022`）。凡是验网络请求，必须在真 `.app` 里做——这个坑让一个「已验证通过」的结论错了一整轮。
+- **`open` 遇到已在运行的实例只会激活它，不会重启。** 重新 `build_app.sh` 之后直接 `open`，界面显示的还是旧版本号、跑的还是旧二进制。`pgrep -x WeChatExporter` 查到进程存活**不等于**跑的是新构建。必须先真正退干净：
+
+  ```bash
+  osascript -e 'quit app "WeChatExporter"'; sleep 2; pkill -x WeChatExporter
+  ```
+
+  另外 `activate` 未必能把窗口从别的应用后面提上来，截图会拍到前台的其他窗口。可靠做法是 `System Events` 里 `set frontmost to true` 再 `perform action "AXRaise" of window 1`，然后用 `position`/`size` 算出区域交给 `screencapture -R` 定点截，不要截全屏。
 
 ## 架构
 
@@ -65,6 +72,8 @@ cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 | 子命令 | `doctor` / `status` / `key scan` / `key extract` / `decrypt` / `sessions --format json --limit --offset` / `export <id> --output --format` | `daemon status` / `init --force [--data-dir]` / `sessions --json -n` / `export …` |
 
 **两个二进制的命令行文法不同**，不能互相套用参数。CLI 定位顺序（macOS `WxCliService.locateExecutable`）：bundle 内 → `~/.local/bin` → `/opt/homebrew/bin` → `/usr/local/bin`。
+
+**wx-cli 的能力面远大于本项目用到的那部分。** 上表列的是我们实际调的子命令，二进制里实际有 `contacts / db_dev / export_media / export_task / info / media / paths / query / search / serve / server / thin_client / watch` 等十几个，还链着 axum + hyper（HTTP 服务器，`serve` 子命令下监听 `127.0.0.1:9100`，路由 `/api/v1/{health,media,search,events}`）、ureq + rustls（HTTP 客户端）、notify（文件监控）。我们从不调这些，所以现状没有暴露面——但换 wx-cli 版本时值得知道自己在分发什么。
 
 `WxCliService.run()` 是所有调用的唯一出口：`Process` + 双管道逐行读取，`timeout: nil` 表示不限时（解密和含媒体导出用它），stderr 逐行喂给 `onActivity` 驱动进度条，`isJSONOutputLine` 过滤掉 `sessions --format json` 的原始输出以免刷屏日志面板。
 

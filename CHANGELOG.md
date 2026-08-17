@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
+## [2.15.3] - 2026-08-17
+
+### Documentation
+- **补齐 v2.15.1 / v2.15.2 两轮改动在文档里的缺口**，无代码变更
+  - `CLAUDE.md`「怎么验证」新增一条陷阱：`open` 遇到已在运行的实例只会激活它、不会重启，重新 `build_app.sh` 后直接 `open` 看到的还是旧版本，`pgrep` 查到进程存活不等于跑的是新构建；顺带记下窗口截图要用 `AXRaise` + `screencapture -R` 定点截，`activate` 未必能把窗口从别的应用后面提上来
+  - `CLAUDE.md` 说明 wx-cli 的能力面远大于本项目用到的部分：二进制里还有十几个未使用的子命令，并链着 axum/hyper（`serve` 下监听 `127.0.0.1:9100`）、ureq、notify。现状无暴露面，但换版本时应当知情
+  - 两份 README 的第三方组件表把 macOS `wx-cli` 的许可证明确为 **MIT** 并给出源码链接，不再只写「见 vendor/README.md」；补充它由 GitHub Actions 从公开 tag 构建、可逐项核对
+  - 英文 README 的系统要求补上密钥提取已验证的微信版本范围（4.1.7–4.1.11），与中文版对齐
+
 ## [2.15.2] - 2026-08-17
 
 ### Changed

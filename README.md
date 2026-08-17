@@ -67,7 +67,7 @@
 
 | 组件 | macOS | Windows |
 |------|-------|---------|
-| 内置 CLI | 仓库 `vendor/macos/wx-cli`（支持微信 4.1.7–4.1.11） | 仓库 `vendor/windows/wx.exe` |
+| 内置 CLI | 仓库 `vendor/macos/wx-cli`（[wx-cli](https://github.com/Sheldon1001/wx-cli) 0.7.5，支持微信 4.1.7–4.1.11） | 仓库 `vendor/windows/wx.exe` |
 | 微信版本 | 4.x（已验证 4.1.7–4.1.11） | 4.x（4.1.7+；4.1.11 内存扫密钥可能失效） |
 
 > **隐私说明**：本工具仅在本地运行，不会上传任何聊天数据或密钥。
@@ -212,9 +212,12 @@ MIT
 
 | 组件 | 用途 | 许可 |
 |---|---|---|
-| `wx-cli` (macOS) | 微信数据库解密与导出 | 见 [vendor/README.md](vendor/README.md) |
+| `wx-cli` (macOS) | 微信数据库解密与导出 | **MIT** — 源码 [Sheldon1001/wx-cli](https://github.com/Sheldon1001/wx-cli) |
 | `wx.exe` (Windows) | 同上 | 见 [vendor/README.md](vendor/README.md) |
 | `ffmpeg` (macOS) | 语音 SILK → MP3、WXGF 动态表情解码 | **LGPL v2.1** |
+
+macOS 的 `wx-cli` 由 GitHub Actions 从公开 tag 构建，`vendor/README.md` 里记了 commit、
+SHA-256 与自行复现的办法，可逐项核对。
 
 其中 ffmpeg 为最小化静态构建（FFmpeg 8.0.1 + LAME 3.100），**未启用 GPL**。
 本项目以独立子进程方式调用它，不做链接，因此不构成衍生作品。
