@@ -218,7 +218,10 @@ final class AppViewModel: ObservableObject {
     /// 所以这里把媒体阶段压在该会话区间的 10%–90% 之间，两头留给其余步骤。
     private func exportProgressHandler(base: Double, span: Double, prefix: String) -> @Sendable (String) -> Void {
         { [weak self] message in
-            Task { @MainActor in
+            // 捕获列表必须写在 Task 这一层：外层闭包的 weak self 若被内层闭包再次捕获，
+            // Swift 5.10（CI 上 macos-14 的编译器）会判为 "captured var 'self'" 而报错，
+            // 本地 Swift 6.3 只给警告，因此这个错只在 CI 上才炸。
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 var fraction = base + span * 0.1
                 if let range = message.range(of: #"(\d+)/(\d+)"#, options: .regularExpression) {
