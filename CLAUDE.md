@@ -34,7 +34,7 @@ cd windows && ./build.ps1              # 产物 windows/dist/WeChatExporter/
 cd windows && ./build.ps1 -SelfContained   # Release 用的自包含包
 ```
 
-仓库**没有测试代码**，CI 也不跑测试——验证靠编译通过 + 实际运行 `.app`。CI（`.github/workflows/ci.yml`）额外校验两个内置二进制：wx-cli 的 `doctor` 输出含 `All checks passed` 且 strings 里能找到 `4.1.11`；ffmpeg / ffprobe 则逐项核对编解码器、滤镜、封装器，再端到端跑通语音（PCM→MP3）、WXGF 静图（HEVC→PNG）、WXGF 动图（palettegen→GIF）与 ffprobe 数帧四条通路，并确认无非系统动态库依赖。**替换 `vendor/macos/` 下任一二进制时必须保持这些成立**，否则 CI 直接失败。
+仓库**没有测试代码**，CI 也不跑测试——验证靠编译通过 + 实际运行 `.app`。CI（`.github/workflows/ci.yml`）额外校验两个内置二进制：wx-cli 的 `doctor` 输出含 `All checks passed` 且 strings 里能找到 `4.1.11`；ffmpeg / ffprobe 则逐项核对编解码器、滤镜、封装器，再端到端跑通语音（PCM→MP3）、WXGF 静图（HEVC→PNG）、WXGF 动图（palettegen→GIF）与 ffprobe 数帧四条通路，并确认无非系统动态库依赖。WXGF 三条通路的输入样本是仓库里的 `tests/fixtures/wxgf-sample.h265`（12 帧、3.4 KB）——**不要改回用系统 ffmpeg 现造**，macos runner 镜像里没有预装 ffmpeg，那样整步会 `exit 127`。**替换 `vendor/macos/` 下任一二进制时必须保持这些成立**，否则 CI 直接失败。
 
 ### 怎么验证
 

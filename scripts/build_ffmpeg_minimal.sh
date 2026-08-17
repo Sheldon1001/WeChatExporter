@@ -144,12 +144,18 @@ head -c 48000 /dev/zero | "$BUILT" -hide_banner -loglevel error \
 [[ -s "$WORK/selftest.mp3" ]] || { echo "错误：语音通路自检失败" >&2; exit 1; }
 echo "语音通路自检通过（$(wc -c < "$WORK/selftest.mp3") 字节 MP3）"
 
-# 端到端跑 WXGF 的两条通路。wx-cli 拿到的是裸 HEVC 流，这里用系统 ffmpeg 造一段
-# 多帧样本；造不出来就跳过（CI 上一定有，本机没装 ffmpeg 时不阻塞构建）。
+# 端到端跑 WXGF 的两条通路。wx-cli 拿到的是裸 HEVC 流，样本优先用仓库里的
+# tests/fixtures/wxgf-sample.h265（12 帧，3.4 KB）；这样不装系统 ffmpeg 也能自检。
+# 拿不到样本时才退回用系统 ffmpeg 现造，两条路都没有就跳过而不阻塞构建。
 SAMPLE="$WORK/wxgf-sample.h265"
-if command -v ffmpeg >/dev/null 2>&1 &&
-   ffmpeg -y -hide_banner -loglevel error -f lavfi -i testsrc=duration=0.5:size=128x128:rate=24 \
-     -c:v hevc_videotoolbox -f hevc "$SAMPLE" 2>/dev/null && [[ -s "$SAMPLE" ]]; then
+FIXTURE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/tests/fixtures/wxgf-sample.h265"
+if [[ -s "$FIXTURE" ]]; then
+  cp "$FIXTURE" "$SAMPLE"
+fi
+if [[ -s "$SAMPLE" ]] ||
+   { command -v ffmpeg >/dev/null 2>&1 &&
+     ffmpeg -y -hide_banner -loglevel error -f lavfi -i testsrc=duration=0.5:size=128x128:rate=24 \
+       -c:v hevc_videotoolbox -f hevc "$SAMPLE" 2>/dev/null && [[ -s "$SAMPLE" ]]; }; then
 
   # 文件头用字节比对，不要用 grep：二进制输入下 grep 的行为不可靠
   magic() { head -c "$2" "$1" | xxd -p | tr -d '\n'; }
