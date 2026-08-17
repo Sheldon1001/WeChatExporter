@@ -28,18 +28,19 @@
 ## 功能
 
 - 图形界面：搜索、多选联系人/群聊
+- **会话按类型分组**（macOS）：侧栏分为好友 / 群聊 / 公众号 / 其他四组，可折叠；点分组右侧的数量徽标即可整类全选或取消——公众号动辄几百个，逐个点不现实
 - **内置 wx-cli**：安装即用，无需单独安装命令行工具
 - **就绪状态提示**：界面顶部显示当前进度（是否已完成「准备数据」）
-- **四种导出方式**（在设置中选择）：
+- **四种导出方式**（macOS，在设置中选择；Windows 固定输出网页）：
   - **分类导出**（默认）：文字、图片、视频、语音分别归档到独立文件夹
   - **只导出文字**：仅 txt / json / csv，速度最快
   - **全部导出**：文字加原始媒体文件，保持目录结构
-  - **网页导出**：生成可用浏览器直接打开的 `.html`，图片、表情、语音内嵌，视频与大附件放在同名 `_media/` 文件夹里外链，链接可点击
-- **语音可播放**：内置 ffmpeg 自动把微信的 SILK 语音转成 MP3，网页导出中直接可播
-- **动态表情会动**：WXGF 表情转码为动图 GIF，而非单帧静图
+  - **网页导出**：生成可用浏览器直接打开的 `.html`，图片、表情、语音内嵌，视频与大附件放在同名 `_media/` 文件夹里外链，链接可点击；单个网页最多 1000 条消息，超出自动分卷并带上下页导航
+- **语音可播放**（macOS）：内置 ffmpeg 自动把微信的 SILK 语音转成 MP3，网页导出中直接可播
+- **动态表情会动**（macOS）：WXGF 表情转码为动图 GIF，而非单帧静图
+- **导出进度可见**：大会话导出时显示当前会话、阶段与已处理的媒体条数，而不是一个不动的「处理中」
 - 自动检测微信数据目录
 - 通过 LLDB / 内存扫描捕获密钥并解密（微信 4.x SQLCipher）
-- 导出 TXT / CSV / JSON
 
 ## 系统要求
 
@@ -119,11 +120,14 @@ cd windows
 
 ```
 Sources/WeChatExporter/     # SwiftUI 应用
+vendor/macos/               # 随包分发的 wx-cli、ffmpeg、ffprobe
 scripts/
 ├── bundle_wx_cli.sh        # 打包内置 wx-cli
+├── build_ffmpeg_minimal.sh # 重建最小化 LGPL 静态 ffmpeg / ffprobe
 ├── create_dmg.sh           # 生成带自定义背景的 DMG
 ├── generate_dmg_background.py  # DMG 背景图生成
 └── prepare_icon.sh         # 生成 AppIcon.icns
+tests/fixtures/             # CI 自检用样本（WXGF 裸 HEVC 流）
 assets/AppIcon.png          # 应用图标源文件
 assets/dmg-background.png      # DMG 背景 1x（660×400 @72dpi）
 assets/dmg-background@2x.png   # DMG 背景 2x（1320×800 @144dpi）
@@ -158,6 +162,10 @@ docs/screenshots/           # README 截图
 xattr -cr /Applications/WeChatExporter.app
 codesign --force --deep --sign - /Applications/WeChatExporter.app
 ```
+
+**部分图片、视频、语音导出后打不开，只有一行说明文字**
+
+微信客户端并不会把所有媒体都留在本机：过期的、没点开过的、被清理过的文件，数据库里只剩一条记录。导出时会在该条消息处标明媒体为何缺失，属于正常现象，不是导出失败。想补齐的话，先在微信里打开对应聊天让它重新下载，再重新导出。
 
 **如何反馈问题**
 

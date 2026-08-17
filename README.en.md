@@ -22,9 +22,17 @@ Get the latest build from **[GitHub Releases](https://github.com/Sheldon1001/WeC
 ## Features
 
 - GUI: search, multi-select contacts/groups
+- Sidebar grouped by chat type (friends / groups / official accounts / other), collapsible, with per-group select-all — macOS
 - Bundled wx-cli (no separate CLI install)
 - Readiness banner for first-time setup
-- Optional media export (best-effort)
+- Four export modes on macOS (Windows always writes HTML):
+  - **By category** (default): text, images, video and voice filed into separate folders
+  - **Text only**: txt / json / csv, fastest
+  - **Everything**: text plus the raw media files
+  - **Web page**: a self-contained `.html` with images, stickers and voice inlined; video and large attachments are linked from a sibling `_media/` folder. Split into volumes of 1000 messages with prev/next navigation
+- Playable voice messages (macOS): bundled ffmpeg transcodes WeChat's SILK to MP3
+- Animated WXGF stickers exported as animated GIF (macOS)
+- Live export progress: current chat, stage and media count
 - Export TXT / CSV / JSON
 
 ## Requirements
@@ -68,3 +76,17 @@ For personal backup of **your own** data only. WeChat schema may change; compati
 ## License
 
 MIT
+
+### Third-party binaries
+
+Release packages bundle prebuilt binaries whose licences are independent of this project's MIT licence:
+
+| Component | Purpose | Licence |
+|---|---|---|
+| `wx-cli` (macOS) / `wx.exe` (Windows) | WeChat database decryption and export | see [vendor/README.md](vendor/README.md) |
+| `ffmpeg` / `ffprobe` (macOS) | SILK → MP3 voice, WXGF sticker decoding | **LGPL v2.1** |
+
+ffmpeg is a minimal static build (FFmpeg 8.0.1 + LAME 3.100) configured **without GPL**, invoked as a
+separate subprocess and never linked in. Rebuild or relink it (LGPL v2.1 §6) with
+`bash scripts/build_ffmpeg_minimal.sh`; the licence text ships at
+`WeChatExporter.app/Contents/Resources/ffmpeg-COPYING.LGPLv2.1`.
